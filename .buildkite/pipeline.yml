@@ -8,8 +8,12 @@ env:
   IMAGE_ID: $IMAGE_ID
 
 steps:
+  # This condition runs before the child-step credentials plugin loads.
   - group: ":apple: macOS"
     key: macos
+    if: |
+      build.source_event == "push" &&
+      build.tag =~ /^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$$/
     steps:
       - label: "Build, sign, notarize (arm64)"
         key: macos-arm64

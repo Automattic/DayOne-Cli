@@ -39,3 +39,79 @@ jobs:
 
       - name: Run tests
         run: cargo test --locked
+
+  macos-release-build:
+    name: macOS release build (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            binary_arch: arm64
+            cargo_args: ""
+          - arch: x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            binary_arch: x86_64
+            cargo_args: "--no-default-features --features production-default,telemetry"
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-${{ matrix.target }}-release
+
+      - name: Set up Ruby
+        if: matrix.arch == 'x64'
+        uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      - name: Validate Fastlane configuration
+        if: matrix.arch == 'x64'
+        run: bundle exec fastlane lanes
+
+      - name: Build release binary
+        run: >-
+          cargo build --release --locked --target ${{ matrix.target }}
+          ${{ matrix.cargo_args }}
+
+      - name: Ad-hoc sign and verify
+        env:
+          BINARY_ARCH: ${{ matrix.binary_arch }}
+          RUST_TARGET: ${{ matrix.target }}
+        run: |
+          binary="target/$RUST_TARGET/release/dayone"
+          test -f "$binary"
+          lipo -archs "$binary" | grep -qx "$BINARY_ARCH"
+          codesign --sign - --identifier com.dayoneapp.cli --options runtime --force "$binary"
+          codesign --verify --strict --verbose=2 "$binary"
+          details="$(codesign --display --verbose=4 "$binary" 2>&1)"
+          grep -Fq "Identifier=com.dayoneapp.cli" <<< "$details"
+          grep -Eq 'flags=.*runtime' <<< "$details"
+
+      - name: Assemble release archive
+        env:
+          RUST_TARGET: ${{ matrix.target }}
+        run: |
+          staging="$(mktemp -d)"
+          cp "target/$RUST_TARGET/release/dayone" "$staging/dayone"
+          cp LICENSE LICENSE-NOTICE "$staging/"
+          chmod +x "$staging/dayone"
+          tar -czf candidate.tar.gz -C "$staging" dayone LICENSE LICENSE-NOTICE
+          for expected in dayone LICENSE LICENSE-NOTICE; do
+            tar -tzf candidate.tar.gz | grep -qx "$expected"
+          done
