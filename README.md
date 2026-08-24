@@ -2,6 +2,8 @@
 
 Command-line access to your Day One account, journals, entries, daily chat, and context items.
 
+**License:** [GNU GPL v2 or later (`GPL-2.0-or-later`)](LICENSE-NOTICE)
+
 The CLI is designed for scriptable workflows and machine-readable output (JSON-first).
 
 ## Supported platforms
@@ -422,4 +424,4 @@ Important limits:
 
 ## License
 
-GNU GPL v2 or later (GPL-2.0-or-later). See [`LICENSE`](LICENSE).
+GNU GPL v2 or later (`GPL-2.0-or-later`). See [`LICENSE-NOTICE`](LICENSE-NOTICE) for the project grant and [`LICENSE`](LICENSE) for the complete GPLv2 terms.

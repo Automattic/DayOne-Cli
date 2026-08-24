@@ -126,6 +126,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v7
+
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
@@ -147,6 +150,7 @@ jobs:
               cp "$file" "release/dayone-${target}${ext}"
             done
           done
+          cp LICENSE LICENSE-NOTICE release/
           ls -la release/
 
       - name: Create or update GitHub Release

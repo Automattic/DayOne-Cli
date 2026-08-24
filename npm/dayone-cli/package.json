@@ -9,7 +9,7 @@
   "bin": {
     "dayone": "run.js"
   },
-  "files": ["run.js"],
+  "files": ["run.js", "LICENSE", "LICENSE-NOTICE"],
   "type": "module",
   "dependencies": {
     "update-notifier": "7.3.1"

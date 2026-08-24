@@ -32,4 +32,4 @@ Keep each pull request focused. Include:
 
 Do not commit generated binaries, local configuration, authentication state, screenshots containing account data, or real credentials disguised as test fixtures.
 
-By contributing, you agree that your contribution is licensed under the repository's [GPL-2.0-or-later license](LICENSE).
+By contributing, you agree that your contribution is licensed under the repository's [GPL-2.0-or-later terms](LICENSE-NOTICE).

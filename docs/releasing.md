@@ -15,7 +15,7 @@ Releases are tag-driven so GitHub Actions and Buildkite build the same commit. G
    ```
 
 3. Wait for **Build Binaries** in GitHub Actions and both macOS Buildkite jobs to pass.
-4. Confirm the GitHub Release contains all seven expected assets: `dayone-darwin-arm64`, `dayone-darwin-x64`, `dayone-linux-arm64`, `dayone-linux-arm64-no-embeddings`, `dayone-linux-x64`, `dayone-linux-x64-no-embeddings`, and `dayone-win32-x64.exe`.
+4. Confirm the GitHub Release contains the seven platform binaries—`dayone-darwin-arm64`, `dayone-darwin-x64`, `dayone-linux-arm64`, `dayone-linux-arm64-no-embeddings`, `dayone-linux-x64`, `dayone-linux-x64-no-embeddings`, and `dayone-win32-x64.exe`—plus `LICENSE` and `LICENSE-NOTICE`.
 
 GitHub Actions and Buildkite may reach the release in either order. Uploads are safe to retry, but npm publishing fails while any required asset is missing.
 

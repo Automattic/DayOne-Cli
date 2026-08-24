@@ -89,8 +89,9 @@ mkdir -p dist
 # without its executable bit. Tar records the mode; extraction restores it.
 staging="$(mktemp -d)"
 cp "$binary" "$staging/dayone"
+cp LICENSE LICENSE-NOTICE "$staging/"
 chmod +x "$staging/dayone"
-tar -czf "dist/$asset_name.tar.gz" -C "$staging" dayone
+tar -czf "dist/$asset_name.tar.gz" -C "$staging" dayone LICENSE LICENSE-NOTICE
 rm -rf "$staging"
 ( cd dist && shasum -a 256 "$asset_name.tar.gz" > "$asset_name.tar.gz.sha256" )
 

@@ -97,10 +97,10 @@ jobs:
           echo "package.json:"
           cat package.json
 
-      - name: Include license in packages
+      - name: Include licensing files in packages
         run: |
           for pkg_dir in npm/cli-* npm/dayone-cli; do
-            cp LICENSE "$pkg_dir/LICENSE"
+            cp LICENSE LICENSE-NOTICE "$pkg_dir/"
           done
 
       - name: Pack dry-run candidates
