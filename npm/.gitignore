@@ -1,0 +1,8 @@
+# Platform binaries are copied in at build time, not tracked in git
+cli-darwin-arm64/dayone
+cli-darwin-x64/dayone
+cli-linux-arm64/dayone
+cli-linux-arm64-no-embeddings/dayone
+cli-linux-x64/dayone
+cli-linux-x64-no-embeddings/dayone
+cli-win32-x64/dayone.exe

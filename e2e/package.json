@@ -1,0 +1,16 @@
+{
+  "name": "dayone-cli-e2e-screenshots",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Playwright screenshot automation for Day One web regression scenarios.",
+  "scripts": {
+    "test": "playwright test",
+    "screenshots": "playwright test tests/entry-regression.screenshots.spec.ts",
+    "conflict:e2e": "playwright test tests/entry-conflict.e2e.spec.ts",
+    "journal-sig:e2e": "playwright test tests/journal-create-signatures.e2e.spec.ts",
+    "run:full": "node --env-file-if-exists=.env scripts/run-screenshots-flow.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0"
+  }
+}

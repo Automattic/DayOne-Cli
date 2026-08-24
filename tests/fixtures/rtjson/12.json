@@ -1,0 +1,52 @@
+{
+  "contents": [
+    {
+      "attributes": {},
+      "text": "12 -\n"
+    },
+    {
+      "attributes": {
+        "line": {
+          "listStyle": "numbered",
+          "indentLevel": 1
+        }
+      },
+      "text": "A\n"
+    },
+    {
+      "attributes": {
+        "line": {
+          "listStyle": "numbered",
+          "indentLevel": 1
+        }
+      },
+      "text": "Numbered\n"
+    },
+    {
+      "attributes": {
+        "line": {
+          "listStyle": "bulleted",
+          "indentLevel": 1
+        }
+      },
+      "text": "(With indent)\n"
+    },
+    {
+      "attributes": {
+        "line": {
+          "listStyle": "numbered",
+          "indentLevel": 1
+        }
+      },
+      "text": "List\n"
+    }
+  ],
+  "meta": {
+    "version": 1,
+    "created": {
+      "version": 1775035146,
+      "platform": "webapp"
+    },
+    "small-lines-removed": true
+  }
+}

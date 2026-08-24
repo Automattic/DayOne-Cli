@@ -1,0 +1,19 @@
+{
+  "name": "@dayone/cli-linux-arm64-no-embeddings",
+  "version": "0.1.0",
+  "description": "Platform binary for @dayone/cli (Linux arm64, no embeddings)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Automattic/DayOne-Cli"
+  },
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "bin": {
+    "dayone": "dayone"
+  },
+  "files": ["dayone"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "GPL-2.0-or-later"
+}

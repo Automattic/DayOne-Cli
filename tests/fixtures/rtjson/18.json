@@ -1,0 +1,35 @@
+{
+  "contents": [
+    {
+      "attributes": {
+        "line": {
+          "header": 1,
+          "identifier": "4CB9DBE5-112D-45D8-9C92-BAB941A1F9D9"
+        }
+      },
+      "text": "18 - Embedded video\n"
+    },
+    {
+      "attributes": {
+        "autolink": true
+      },
+      "text": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ&start_radio=1"
+    },
+    {
+      "embeddedObjects": [
+        {
+          "type": "preview",
+          "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ&start_radio=1"
+        }
+      ]
+    }
+  ],
+  "meta": {
+    "created": {
+      "platform": "com.bloombuilt.dayone-mac",
+      "version": 1745
+    },
+    "small-lines-removed": true,
+    "version": 1
+  }
+}

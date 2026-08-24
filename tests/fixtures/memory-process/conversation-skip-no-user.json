@@ -1,0 +1,20 @@
+{
+  "conversation": {
+    "messages": [
+      {
+        "id": "m1",
+        "role": "assistant",
+        "content": "I can help summarize your day."
+      },
+      {
+        "id": "m2",
+        "role": "meta",
+        "content": "memories_update"
+      }
+    ],
+    "last_memory_check_message_id": null
+  },
+  "date": "2026-04-08",
+  "timezone": "UTC",
+  "locale": "en-US"
+}

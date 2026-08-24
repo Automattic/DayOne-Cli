@@ -1,0 +1,27 @@
+# Required env vars before running `npm run run:full`:
+# - E2E_JOURNAL_ID
+# - E2E_EMAIL
+# - E2E_PASSWORD
+# - E2E_ENCRYPTION_KEY
+# Optional:
+# - E2E_API_HOST (default: https://stg.dayone.me)
+# - DAYONE_CONFIG_DIR (if you use non-default local config path)
+#
+# Screenshot matrix:
+# - create: plain text
+# - create: formatted markdown
+# - create: plain text + image at end
+# - create: formatted markdown + image at end
+# - create: formatted markdown + inline image placeholder (![](dayone-moment://))
+
+printf '%s' "$E2E_PASSWORD" | dayone --api-host "${E2E_API_HOST:-https://stg.dayone.me}" auth login --email "$E2E_EMAIL" --password-stdin
+printf '%s' "$E2E_ENCRYPTION_KEY" | dayone --api-host "${E2E_API_HOST:-https://stg.dayone.me}" auth key-set --key-stdin
+dayone --api-host "${E2E_API_HOST:-https://stg.dayone.me}" sync
+dayone --api-host "${E2E_API_HOST:-https://stg.dayone.me}" entry write --journal-id "$E2E_JOURNAL_ID" --body "E2E plain text entry - $(date '+%Y-%m-%d %H:%M:%S')"
+dayone --api-host "${E2E_API_HOST:-https://stg.dayone.me}" entry write --journal-id "$E2E_JOURNAL_ID" --body "$(printf '# E2E Formatted Entry - %s\n\nThis entry validates markdown rendering.\n\n- one\n- two\n\n**bold** and _italic_.' "$(date '+%Y-%m-%d %H:%M:%S')")"
+dayone --api-host "${E2E_API_HOST:-https://stg.dayone.me}" entry write --journal-id "$E2E_JOURNAL_ID" --body "E2E plain text + image at end - $(date '+%Y-%m-%d %H:%M:%S')" --attach "e2e/fixtures/sample-image.png"
+dayone --api-host "${E2E_API_HOST:-https://stg.dayone.me}" entry write --journal-id "$E2E_JOURNAL_ID" --body "$(printf '# E2E Markdown + image - %s\n\nImage should render at the end.' "$(date '+%Y-%m-%d %H:%M:%S')")" --attach "e2e/fixtures/sample-image.png"
+dayone --api-host "${E2E_API_HOST:-https://stg.dayone.me}" entry write --journal-id "$E2E_JOURNAL_ID" --body "$(printf '# E2E Inline placeholder - %s\n\nBefore image.\n\n![](dayone-moment://)\n\nAfter image.' "$(date '+%Y-%m-%d %H:%M:%S')")" --attach "e2e/fixtures/sample-image.png"
+dayone --api-host "${E2E_API_HOST:-https://stg.dayone.me}" entry write --journal-id "$E2E_JOURNAL_ID" --body "$(printf '# E2E Video placeholder - %s\n\nBefore video.\n\n![](dayone-moment:/video/)\n\nAfter video.' "$(date '+%Y-%m-%d %H:%M:%S')")" --attach "e2e/fixtures/sample-video.mp4"
+dayone --api-host "${E2E_API_HOST:-https://stg.dayone.me}" entry write --journal-id "$E2E_JOURNAL_ID" --body "$(printf '# E2E PDF placeholder - %s\n\nBefore PDF.\n\n![](dayone-moment:/pdfAttachment/)\n\nAfter PDF.' "$(date '+%Y-%m-%d %H:%M:%S')")" --attach "e2e/fixtures/sample-pdf.pdf"
+dayone --api-host "${E2E_API_HOST:-https://stg.dayone.me}" sync

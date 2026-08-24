@@ -1,0 +1,42 @@
+{
+  "contents": [
+    {
+      "attributes": {},
+      "text": "06 - "
+    },
+    {
+      "attributes": {
+        "bold": true
+      },
+      "text": "Bold"
+    },
+    {
+      "attributes": {},
+      "text": ", "
+    },
+    {
+      "attributes": {
+        "italic": true
+      },
+      "text": "italic,"
+    },
+    {
+      "attributes": {},
+      "text": " and "
+    },
+    {
+      "attributes": {
+        "strikethrough": true
+      },
+      "text": "strikethrough"
+    }
+  ],
+  "meta": {
+    "version": 1,
+    "created": {
+      "version": 1775035146,
+      "platform": "webapp"
+    },
+    "small-lines-removed": true
+  }
+}

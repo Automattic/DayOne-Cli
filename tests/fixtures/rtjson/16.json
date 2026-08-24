@@ -1,0 +1,35 @@
+{
+  "contents": [
+    {
+      "attributes": {},
+      "text": "16 - Video and audio\n"
+    },
+    {
+      "embeddedObjects": [
+        {
+          "type": "audio",
+          "identifier": "716218DB71014D9E8297904B4118E277"
+        }
+      ]
+    },
+    {
+      "embeddedObjects": [
+        {
+          "type": "video",
+          "identifier": "36E1FA2368E343ADA09946ABDB5216D5"
+        }
+      ]
+    },
+    {
+      "text": ""
+    }
+  ],
+  "meta": {
+    "version": 1,
+    "created": {
+      "version": 1775035146,
+      "platform": "webapp"
+    },
+    "small-lines-removed": true
+  }
+}

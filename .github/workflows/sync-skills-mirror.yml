@@ -1,0 +1,57 @@
+name: Sync skills folder mirror
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "skills/dayone-cli/**"
+      - ".github/workflows/sync-skills-mirror.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync-skills:
+    if: github.event.deleted == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build public mirror branch
+        run: |
+          PUBLIC_SKILL_TREE="$(git rev-parse "HEAD:skills/dayone-cli")"
+          SKILLS_TREE="$(
+            printf "040000 tree %s\tdayone-cli\n" "${PUBLIC_SKILL_TREE}" | git mktree
+          )"
+          ROOT_README_BLOB="$(git rev-parse "HEAD:README.md")"
+          PREFIXED_TREE="$(
+            printf "100644 blob %s\tREADME.md\n040000 tree %s\tskills\n" \
+              "${ROOT_README_BLOB}" "${SKILLS_TREE}" | git mktree
+          )"
+          SYNC_SHA="$(
+            printf "chore: sync skills mirror\n" | \
+              GIT_AUTHOR_NAME="github-actions[bot]" \
+              GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" \
+              GIT_COMMITTER_NAME="github-actions[bot]" \
+              GIT_COMMITTER_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" \
+              git commit-tree "${PREFIXED_TREE}"
+          )"
+          git branch -f skills-mirror-sync "${SYNC_SHA}"
+
+      - name: Push split branch to bloom/dayone-cli-skills
+        env:
+          MIRROR_PAT: ${{ secrets.SKILLS_MIRROR_PAT }}
+          TARGET_REPO: github.com/bloom/dayone-cli-skills.git
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          if [ -z "${MIRROR_PAT}" ]; then
+            echo "Missing required secret: SKILLS_MIRROR_PAT"
+            exit 1
+          fi
+
+          git push --force "https://x-access-token:${MIRROR_PAT}@${TARGET_REPO}" "skills-mirror-sync:${TARGET_BRANCH}"

@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "base_url": "https://stg.dayone.me",
+  "processed": false,
+  "skipped_reason": "no_new_user_messages",
+  "api_loops": 0,
+  "new_message_count": 1,
+  "context_message_count": 0,
+  "last_memory_check_message_id": "m1",
+  "updated_summary": null,
+  "memory_changes": []
+}

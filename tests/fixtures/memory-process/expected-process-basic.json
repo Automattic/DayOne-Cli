@@ -1,0 +1,14 @@
+{
+  "ok": true,
+  "processed": true,
+  "skipped_reason": null,
+  "api_loops": 2,
+  "new_message_count": 2,
+  "context_message_count": 0,
+  "updated_summary": "User prefers afternoon walks and decaf coffee.",
+  "memory_changes": [
+    {
+      "change": "create"
+    }
+  ]
+}

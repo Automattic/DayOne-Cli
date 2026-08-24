@@ -1,0 +1,160 @@
+name: Build Binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: build-binaries-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.npm_pkg }})
+    runs-on: ${{ matrix.os }}
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      # Keep the Windows release self-contained on systems without the VC++ redistributable.
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C target-feature=+crt-static"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Signed and notarized macOS binaries are built by Buildkite.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            npm_pkg: cli-linux-x64
+            binary: dayone
+            # Default Linux package keeps embeddings enabled.
+            cargo_args: ""
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            npm_pkg: cli-linux-x64-no-embeddings
+            binary: dayone
+            # Compatibility package: build on Ubuntu 22.04 (glibc 2.35).
+            cargo_args: "--no-default-features --features production-default,telemetry"
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            npm_pkg: cli-linux-arm64
+            binary: dayone
+            cargo_args: ""
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+            npm_pkg: cli-linux-arm64-no-embeddings
+            binary: dayone
+            # Compatibility package: build on Ubuntu 22.04 (glibc 2.35).
+            cargo_args: "--no-default-features --features production-default,telemetry"
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            npm_pkg: cli-win32-x64
+            binary: dayone.exe
+            # Windows ships without fastembed/ONNX so the binary runs without the VC++ runtime.
+            cargo_args: "--no-default-features --features production-default,telemetry"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Stamp version from tag
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          rm -f Cargo.toml.bak
+          echo "Cargo.toml version set to $VERSION"
+          grep '^version' Cargo.toml
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          # fastembed/ONNX needs libstdc++.a — rust-lld doesn't search the gcc path
+          GCC_DIR=$(dirname "$(find /usr/lib/gcc -name 'libstdc++.a' 2>/dev/null | head -1)")
+          if [ -n "$GCC_DIR" ]; then
+            ARCH="$(dpkg --print-architecture)"
+            sudo mkdir -p "/usr/lib/${ARCH}-linux-gnu"
+            sudo ln -sf "$GCC_DIR/libstdc++.a" "/usr/lib/${ARCH}-linux-gnu/libstdc++.a"
+          fi
+
+      - name: Build release binary
+        env:
+          # Baked into the binary via `option_env!` in src/telemetry.rs so
+          # released artifacts can report errors to Sentry without each user
+          # having to configure anything. Unset for tests.yml so CI runs
+          # never phone home.
+          DAYONE_SENTRY_DSN: ${{ secrets.DAYONE_SENTRY_DSN }}
+          DAYONE_BUILD_SHA: ${{ github.sha }}
+          CARGO_PROFILE_RELEASE_DEBUG: "true"
+        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.cargo_args }}
+
+      - name: Upload debug information and source context to Sentry
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: >-
+          ./scripts/upload-sentry-debug-files.sh
+          "${{ matrix.target }}"
+          "target/${{ matrix.target }}/release/${{ matrix.binary }}"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.npm_pkg }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+          if-no-files-found: error
+
+  release:
+    name: Attach binaries to GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Rename binaries for release
+        run: |
+          mkdir -p release
+          for dir in artifacts/cli-*; do
+            pkg=$(basename "$dir")
+            # e.g. cli-darwin-arm64 -> dayone-darwin-arm64
+            target=${pkg#cli-}
+            for file in "$dir"/*; do
+              base=$(basename "$file")
+              ext=""
+              if [[ "$base" == *.exe ]]; then
+                ext=".exe"
+              fi
+              cp "$file" "release/dayone-${target}${ext}"
+            done
+          done
+          ls -la release/
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          release_flags=(--generate-notes)
+          [[ "$TAG" == *-* ]] && release_flags+=(--prerelease)
+          gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" "${release_flags[@]}" \
+            || gh release upload "$TAG" release/* --repo "$GITHUB_REPOSITORY" --clobber

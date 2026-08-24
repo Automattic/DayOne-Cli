@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Git pre-commit: scan staged changes for secrets, then run Clippy.
+#
+# One-time setup (run from repo root):
+#   git config core.hooksPath githooks
+#
+# Emergency Clippy bypass (not recommended):
+#   SKIP_CLIPPY=1 git commit ...
+
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+has_dayone_secrets_file() {
+  [[ -n "${HOME:-}" && -f "$HOME/.config/dayone/secrets-cli" ]] && return 0
+  case "$(uname -s)" in
+    Darwin)
+      [[ -n "${HOME:-}" && -f "$HOME/Library/Application Support/dayone/secrets-cli" ]]
+      ;;
+    MINGW* | MSYS* | CYGWIN*)
+      [[ -n "${APPDATA:-}" && -f "$APPDATA/dayone/secrets-cli" ]]
+      ;;
+    *)
+      [[ -n "${XDG_CONFIG_HOME:-}" && -f "$XDG_CONFIG_HOME/dayone/secrets-cli" ]]
+      ;;
+  esac
+}
+
+if command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-commit: scanning staged changes with Gitleaks..." >&2
+  gitleaks git --staged --config .gitleaks.toml --no-banner --redact=100 --verbose
+elif has_dayone_secrets_file; then
+  echo "pre-commit: Gitleaks is required when a Day One secrets-cli file exists" >&2
+  exit 1
+else
+  echo "pre-commit: Gitleaks is not installed; skipping secret scan" >&2
+fi
+
+if [[ -n "${SKIP_CLIPPY:-}" ]]; then
+  echo "pre-commit: skipping clippy (SKIP_CLIPPY is set)" >&2
+  exit 0
+fi
+
+echo "pre-commit: cargo clippy (deny warnings)..." >&2
+exec cargo clippy --all-targets --all-features --locked -- -D warnings

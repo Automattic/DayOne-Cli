@@ -1,0 +1,39 @@
+{
+  "contents": [
+    {
+      "attributes": {},
+      "text": "13 -\n"
+    },
+    {
+      "attributes": {
+        "line": {
+          "listStyle": "checkbox",
+          "indentLevel": 1,
+          "checked": false
+        }
+      },
+      "text": "An unchecked item\n"
+    },
+    {
+      "attributes": {
+        "line": {
+          "listStyle": "checkbox",
+          "indentLevel": 1,
+          "checked": true
+        }
+      },
+      "text": "A checked item\n"
+    },
+    {
+      "text": ""
+    }
+  ],
+  "meta": {
+    "version": 1,
+    "created": {
+      "version": 1775035146,
+      "platform": "webapp"
+    },
+    "small-lines-removed": true
+  }
+}

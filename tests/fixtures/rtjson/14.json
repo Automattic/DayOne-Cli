@@ -1,0 +1,24 @@
+{
+  "contents": [
+    {
+      "attributes": {},
+      "text": "14 -\n"
+    },
+    {
+      "attributes": {
+        "line": {
+          "quote": true
+        }
+      },
+      "text": "A block quote\n"
+    }
+  ],
+  "meta": {
+    "version": 1,
+    "created": {
+      "version": 1775035146,
+      "platform": "webapp"
+    },
+    "small-lines-removed": true
+  }
+}

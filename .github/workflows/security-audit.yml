@@ -1,0 +1,40 @@
+name: Security audit
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+  push:
+    branches:
+      - main
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+  schedule:
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: security-audit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Check RustSec advisories
+        # No patched stable rsa release exists. The CLI performs RSA operations
+        # locally and does not expose decryption timing as a network oracle.
+        run: cargo audit --ignore RUSTSEC-2023-0071

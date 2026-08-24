@@ -1,0 +1,42 @@
+{
+  "contents": [
+    {
+      "attributes": {
+        "line": {
+          "header": 1
+        }
+      },
+      "text": "21 - Mixed\n"
+    },
+    {
+      "attributes": {
+        "line": {
+          "listStyle": "bulleted",
+          "indentLevel": 1
+        },
+        "bold": true
+      },
+      "text": "bold"
+    },
+    {
+      "attributes": {
+        "line": {
+          "listStyle": "bulleted",
+          "indentLevel": 1
+        }
+      },
+      "text": " inside a list\n"
+    },
+    {
+      "text": ""
+    }
+  ],
+  "meta": {
+    "version": 1,
+    "created": {
+      "version": 1775035146,
+      "platform": "webapp"
+    },
+    "small-lines-removed": true
+  }
+}

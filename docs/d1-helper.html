@@ -1,0 +1,975 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>D1 Blob Inspector</title>
+    <style>
+      :root {
+        --bg: #0b0c10;
+        --panel: #111318;
+        --soft: #171a21;
+        --card: #0f1116;
+        --text: #e8ecf1;
+        --muted: #9aa5b1;
+        --brand: #7aa2ff;
+        --bad: #ff6b6b;
+        --ok: #2ecc71;
+        --warn: #ffd166;
+        --border: #23262e;
+        --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+        --radius: 16px;
+      }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f7f8fb;
+          --panel: #ffffff;
+          --soft: #ffffff;
+          --card: #ffffff;
+          --text: #0b1021;
+          --muted: #536072;
+          --brand: #3256ff;
+          --bad: #d7263d;
+          --ok: #0f9d58;
+          --warn: #b78b00;
+          --border: #e4e7ee;
+          --shadow: 0 10px 24px rgba(21, 24, 39, 0.08);
+        }
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto,
+          Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+        line-height: 1.45;
+      }
+      .wrap {
+        max-width: 1100px;
+        margin: 40px auto;
+        padding: 0 20px;
+      }
+      header {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 18px;
+      }
+      h1 {
+        font-size: clamp(22px, 3.8vw, 34px);
+        margin: 0;
+        letter-spacing: 0.3px;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+      }
+      .io {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 16px;
+        margin-bottom: 20px;
+      }
+      @media (max-width: 880px) {
+        .io {
+          grid-template-columns: 1fr;
+        }
+      }
+      .pad {
+        padding: 16px 16px 12px 16px;
+      }
+      .pad h2 {
+        margin: 4px 0 10px;
+        font-size: 16px;
+      }
+      .area {
+        width: 100%;
+        min-height: 180px;
+        border-radius: 12px;
+        border: 1px dashed var(--border);
+        background: var(--soft);
+        padding: 12px 12px 40px 12px;
+        color: var(--text);
+        outline: none;
+        resize: vertical;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas,
+          "Liberation Mono", monospace;
+        box-sizing: border-box;
+        max-width: 100%;
+      }
+      .area::placeholder {
+        color: var(--muted);
+      }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 10px;
+      }
+      .btn,
+      .chip,
+      label.file {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border-radius: 999px;
+        padding: 10px 14px;
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--text);
+        text-decoration: none;
+        cursor: pointer;
+        user-select: none;
+      }
+      .btn.primary {
+        background: linear-gradient(180deg, var(--brand), #5a84ff);
+        border-color: transparent;
+        color: white;
+        font-weight: 600;
+      }
+      .btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      label.file input {
+        display: none;
+      }
+      .drop {
+        border: 2px dashed var(--border);
+        border-radius: 12px;
+        padding: 14px;
+        text-align: center;
+        color: var(--muted);
+        transition: 0.2s all;
+        background: repeating-linear-gradient(
+          135deg,
+          transparent,
+          transparent 10px,
+          rgba(128, 128, 128, 0.05) 10px,
+          rgba(128, 128, 128, 0.05) 20px
+        );
+      }
+      .drop.dragover {
+        border-color: var(--brand);
+        color: var(--brand);
+        background: rgba(122, 162, 255, 0.09);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-top: 10px;
+      }
+      @media (max-width: 700px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      .stat {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 12px;
+      }
+      .stat .k {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .stat .v {
+        font-weight: 600;
+        margin-top: 4px;
+        word-break: break-all;
+      }
+      table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        overflow: hidden;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+      }
+      thead th {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        background: var(--soft);
+        border-bottom: 1px solid var(--border);
+        text-align: left;
+        padding: 12px;
+      }
+      tbody td {
+        border-bottom: 1px solid var(--border);
+        padding: 12px;
+        vertical-align: top;
+      }
+      tbody tr:last-child td {
+        border-bottom: none;
+      }
+      code,
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas,
+          "Liberation Mono", monospace;
+        font-size: 13px;
+      }
+      .value {
+        max-width: 100%;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        border: 1px solid var(--border);
+        background: var(--card);
+      }
+      .badge.ok {
+        border-color: rgba(46, 204, 113, 0.35);
+        color: var(--ok);
+      }
+      .badge.warn {
+        border-color: rgba(255, 209, 102, 0.4);
+        color: var(--warn);
+      }
+      .badge.bad {
+        border-color: rgba(255, 107, 107, 0.4);
+        color: var(--bad);
+      }
+      .placeholder {
+        display: inline-block;
+        width: 110px;
+        height: 16px;
+        border-radius: 6px;
+        background: linear-gradient(
+          100deg,
+          rgba(120, 130, 150, 0.25) 20%,
+          rgba(120, 130, 150, 0.12) 40%,
+          rgba(120, 130, 150, 0.25) 60%
+        );
+        background-size: 200% 100%;
+        animation: shimmer 1.4s infinite;
+      }
+      @keyframes shimmer {
+        0% {
+          background-position: 200% 0;
+        }
+        100% {
+          background-position: -200% 0;
+        }
+      }
+      .footer {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 10px;
+      }
+      .enc-toggle {
+        display: flex;
+        gap: 6px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        padding: 4px;
+        border-radius: 999px;
+      }
+      .enc-toggle button {
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        padding: 6px 10px;
+        border-radius: 999px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      .enc-toggle button.active {
+        background: var(--soft);
+        color: var(--text);
+      }
+      .err {
+        color: var(--bad);
+        font-weight: 600;
+      }
+      .dim {
+        color: var(--muted);
+      }
+
+      /* small helper for the ciphertext toggle button */
+      #toggleCiphertext.active {
+        background: linear-gradient(
+          180deg,
+          rgba(122, 162, 255, 0.12),
+          rgba(90, 132, 255, 0.06)
+        );
+        color: var(--brand);
+        border-color: rgba(122, 162, 255, 0.16);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div>
+          <h1>D1 Blob Inspector</h1>
+          <div class="sub">
+            Paste base64/hex, or drop a <span class="mono">.d1</span> binary.
+            The tool parses and explains every field.
+          </div>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center">
+          <a
+            href="d1-binary-format.md"
+            class="btn primary"
+            title="Open the D1 Binary Format specification"
+            >D1 Format Spec</a
+          >
+          <div style="display: flex; gap: 8px; align-items: center">
+            <div class="enc-toggle" role="tablist" aria-label="Encoding toggle">
+              <button id="toHex" class="active" aria-selected="true">
+                Hex
+              </button>
+              <button id="toB64" aria-selected="false">Base64</button>
+              <button id="toUtf8" aria-selected="false">UTF-8</button>
+            </div>
+            <button
+              id="toggleCiphertext"
+              class="btn"
+              aria-pressed="false"
+              title="Reveal ciphertext bytes (hidden by default)"
+            >
+              Show ciphertext
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <section class="io">
+        <div class="card pad">
+          <h2>Paste base64 or hex</h2>
+          <textarea
+            id="paste"
+            class="area mono"
+            placeholder="Paste a D1 blob here (base64 or hex)…"
+          ></textarea>
+          <div class="controls">
+            <div class="badge" id="inputKind">No input</div>
+            <div style="display: flex; gap: 8px; align-items: center">
+              <button class="btn" id="clear">Clear</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card pad">
+          <h2>Or drop a file</h2>
+          <div id="drop" class="drop">
+            Drag &amp; drop a file anywhere here, or
+            <label class="file" style="margin-left: 6px">
+              <input id="file" type="file" />
+              <span>choose a file</span>
+            </label>
+          </div>
+          <div class="grid">
+            <div class="stat">
+              <div class="k">File name</div>
+              <div class="v" id="statName" title="—">—</div>
+            </div>
+            <div class="stat">
+              <div class="k">Size</div>
+              <div class="v" id="statSize">—</div>
+            </div>
+            <div class="stat">
+              <div class="k">Parse status</div>
+              <div class="v" id="statStatus">—</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card pad">
+        <h2>Parsed Fields</h2>
+        <div
+          id="alerts"
+          style="margin: 8px 0 14px; display: flex; gap: 8px; flex-wrap: wrap"
+        ></div>
+        <div class="table-wrap">
+          <table id="fieldsTable" aria-live="polite">
+            <thead>
+              <tr>
+                <th style="width: 16ch">Field</th>
+                <th style="width: 10ch">Offset</th>
+                <th style="width: 10ch">Size</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody id="tbody">
+              <tr>
+                <td class="dim" colspan="4">
+                  No data yet. Paste or drop a file to begin.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="footer">
+          AES-256-GCM (schema 0x01). For v2, plaintext is gzip-compressed before
+          encryption. Ciphertext bytes are omitted by default; use "Show
+          ciphertext" to reveal. GCM tag and checksum are always shown.
+        </div>
+      </section>
+    </div>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/js-md5@0.8.3/src/md5.min.js"
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+    ></script>
+    <script>
+      /* ---------- Small helpers ---------- */
+      const $ = (q) => document.querySelector(q);
+      const encState = { mode: "hex" }; // 'hex' | 'base64' | 'utf8'
+      let showCiphertext = false;
+
+      function toHex(bytes) {
+        return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+      }
+      function toHexGrouped(bytes, group = 2, chunk = 16) {
+        const h = toHex(bytes);
+        const pairs = h.match(/../g) || [];
+        const grouped = [];
+        for (let i = 0; i < pairs.length; i += group) {
+          grouped.push(pairs.slice(i, i + group).join(""));
+        }
+        const lines = [];
+        for (let i = 0; i < grouped.length; i += chunk) {
+          lines.push(grouped.slice(i, i + chunk).join(" "));
+        }
+        return lines.join("\n");
+      }
+      function toBase64(bytes) {
+        let bin = "";
+        for (let i = 0; i < bytes.length; i++)
+          bin += String.fromCharCode(bytes[i]);
+        return btoa(bin);
+      }
+      function bytesToUtf8(bytes) {
+        try {
+          // Use replacement characters for invalid sequences rather than throwing
+          const dec = new TextDecoder("utf-8", { fatal: false });
+          return dec.decode(bytes);
+        } catch (e) {
+          return null;
+        }
+      }
+      function fmtOffset(n) {
+        return "0x" + n.toString(16).padStart(4, "0");
+      }
+      function fmtSize(n) {
+        return n + " B";
+      }
+      function cleanInput(s) {
+        return (s || "").replace(/[\s\r\n]+/g, "").trim();
+      }
+
+      function bytesFromHex(str) {
+        const s = cleanInput(str);
+        if (!/^[0-9a-fA-F]*$/.test(s) || s.length % 2 !== 0)
+          throw new Error("Invalid hex input");
+        const out = new Uint8Array(s.length / 2);
+        for (let i = 0; i < s.length; i += 2)
+          out[i / 2] = parseInt(s.slice(i, i + 2), 16);
+        return out;
+      }
+      function bytesFromBase64(str) {
+        const s = cleanInput(str);
+        if (!/^[A-Za-z0-9+/=]*$/.test(s))
+          throw new Error("Invalid base64 input characters");
+        try {
+          const bin = atob(s);
+          const out = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+          return out;
+        } catch (e) {
+          throw new Error("Invalid base64 input");
+        }
+      }
+      function detectEncoding(str) {
+        const s = (str || "").trim();
+        if (!s) return { kind: "empty" };
+        const noSpace = cleanInput(s);
+        const hexOK =
+          /^[0-9a-fA-F]+$/.test(noSpace) && noSpace.length % 2 === 0;
+        const b64OK =
+          /^[A-Za-z0-9+/=]+$/.test(noSpace) && noSpace.length % 4 === 0;
+        if (hexOK && !b64OK) return { kind: "hex" };
+        if (b64OK && !hexOK) return { kind: "base64" };
+        if (hexOK && b64OK) {
+          // Heuristic: if it decodes cleanly as base64 and the first two bytes are 0x44,0x31 -> base64
+          try {
+            const b = bytesFromBase64(s);
+            if (b.length >= 2 && b[0] === 0x44 && b[1] === 0x31)
+              return { kind: "base64" };
+          } catch {}
+          return { kind: "hex" };
+        }
+        // Try base64 first
+        try {
+          bytesFromBase64(s);
+          return { kind: "base64" };
+        } catch {}
+        try {
+          bytesFromHex(s);
+          return { kind: "hex" };
+        } catch {}
+        return { kind: "unknown" };
+      }
+
+      /* MD5 verification: compare computed MD5 over all preceding bytes to stored checksum */
+
+      /* ---------- D1 parsing ---------- */
+      function parseD1(bytes) {
+        const out = { fields: [], alerts: [], ok: true, meta: {} };
+        const len = bytes.length;
+        const push = (name, offset, size, value, binary = false) => {
+          out.fields.push({ name, offset, size, value, binary });
+        };
+        if (len < 2 + 1 + 1 + 12 + 16 + 16) {
+          out.ok = false;
+          out.alerts.push({
+            kind: "bad",
+            text: "Blob too small to be a valid D1 container.",
+          });
+          return out;
+        }
+
+        let o = 0;
+        const magic = bytes.slice(o, o + 2);
+        o += 2;
+        const isMagic = magic[0] === 0x44 && magic[1] === 0x31;
+        push("Magic", 0, 2, isMagic ? "D1" : `0x${toHex(magic)}`, false);
+        if (!isMagic) {
+          out.ok = false;
+          out.alerts.push({
+            kind: "bad",
+            text: 'Magic mismatch: expected ASCII "D1".',
+          });
+        }
+
+        const schema = bytes[o];
+        o += 1;
+        push(
+          "Crypto schema version",
+          2,
+          1,
+          schema + ` ${schema === 0x01 ? "(AES-256-GCM)" : ""}`
+        );
+        if (schema !== 0x01) {
+          out.ok = false;
+          out.alerts.push({
+            kind: "bad",
+            text: `Unsupported crypto schema 0x${schema
+              .toString(16)
+              .padStart(2, "0")} (expected 0x01).`,
+          });
+        }
+
+        const ver = bytes[o];
+        o += 1;
+        push("Binary format version", 3, 1, ver);
+        if (ver > 2) {
+          out.ok = false;
+          out.alerts.push({
+            kind: "bad",
+            text: `Unrecognized binary format version ${ver}.`,
+          });
+        }
+
+        if (ver >= 1) {
+          if (o + 32 > len) {
+            out.ok = false;
+            out.alerts.push({
+              kind: "bad",
+              text: "Truncated before Fingerprint.",
+            });
+            return out;
+          }
+          const fp = bytes.slice(o, o + 32);
+          push("Fingerprint (pubkey SHA-256)", o, 32, fp, true);
+          o += 32;
+
+          if (o + 2 > len) {
+            out.ok = false;
+            out.alerts.push({
+              kind: "bad",
+              text: "Truncated before Signature length.",
+            });
+            return out;
+          }
+          const sigLen = (bytes[o] << 8) | bytes[o + 1];
+          push("Signature length", o, 2, sigLen);
+          o += 2;
+
+          if (o + sigLen > len) {
+            out.ok = false;
+            out.alerts.push({
+              kind: "bad",
+              text: "Truncated in Signature field.",
+            });
+            return out;
+          }
+          const sig = bytes.slice(o, o + sigLen);
+          push(
+            "Signature (RSA-SHA256 over Locked Key)",
+            o,
+            sigLen,
+            sigLen ? sig : new Uint8Array(),
+            true
+          );
+          o += sigLen;
+
+          if (o + 256 > len) {
+            out.ok = false;
+            out.alerts.push({
+              kind: "bad",
+              text: "Truncated before Locked Key.",
+            });
+            return out;
+          }
+          const locked = bytes.slice(o, o + 256);
+          push("Locked Key (RSA-OAEP ciphertext)", o, 256, locked, true);
+          o += 256;
+        }
+
+        if (o + 12 > len) {
+          out.ok = false;
+          out.alerts.push({ kind: "bad", text: "Truncated before IV." });
+          return out;
+        }
+        const iv = bytes.slice(o, o + 12);
+        push("IV (AES-GCM, 12 bytes)", o, 12, iv, true);
+        o += 12;
+
+        // Ciphertext is everything up to the last 32 bytes (GCM tag + MD5)
+        const tail = 16 + 16;
+        if (len - o < tail) {
+          out.ok = false;
+          out.alerts.push({
+            kind: "bad",
+            text: "Not enough bytes for GCM tag + checksum.",
+          });
+          return out;
+        }
+        const ctLen = len - o - tail;
+        const ctOffset = o;
+        // Store actual ciphertext bytes in the parsed output, but the UI will hide them by default.
+        const ciphertextBytes = bytes.slice(ctOffset, ctOffset + ctLen);
+        push("Ciphertext", ctOffset, ctLen, ciphertextBytes, true);
+        o += ctLen;
+
+        const tag = bytes.slice(o, o + 16);
+        push("GCM tag (16 bytes)", o, 16, tag, true);
+        o += 16;
+        const checksum = bytes.slice(o, o + 16);
+        push("Checksum (MD5 over all preceding bytes)", o, 16, checksum, true);
+        o += 16;
+
+        out.meta.totalSize = len;
+        out.meta.version = ver;
+        out.meta.schema = schema;
+        out.meta.ciphertextLen = ctLen;
+        return out;
+      }
+
+      /* ---------- Rendering ---------- */
+      function renderValue(field) {
+        if (field.binary) {
+          const bytes = field.value;
+          if (!(bytes instanceof Uint8Array)) return "";
+          // Ciphertext is hidden by default unless showCiphertext is true
+          if (field.name === "Ciphertext" && !showCiphertext) {
+            const n = field.size;
+            return `<span class="badge"><span class="placeholder" aria-hidden="true"></span> <span class="dim">omitted</span> — ${n} bytes</span>`;
+          }
+          // Otherwise render according to current encoding mode
+          if (encState.mode === "hex") {
+            return `<div class="value mono">${toHexGrouped(bytes)}</div>`;
+          } else if (encState.mode === "base64") {
+            return `<div class="value mono">${toBase64(bytes)}</div>`;
+          } else if (encState.mode === "utf8") {
+            const decoded = bytesToUtf8(bytes);
+            if (decoded === null) {
+              // Fallback to hex if the decoder failed catastrophically
+              return `<div class="value mono">${toHexGrouped(
+                bytes
+              )}</div><div class="dim">Invalid UTF-8; showing hex</div>`;
+            }
+            // detect replacement characters (U+FFFD)
+            const hasReplacement = decoded.indexOf("\uFFFD") !== -1;
+            const escaped = decoded;
+            return `<div class="value">${escaped}</div>${
+              hasReplacement
+                ? `<div class="dim">Note: some bytes could not be decoded as valid UTF-8 (shown with replacement characters)</div>`
+                : ""
+            }`;
+          }
+          return "";
+        } else {
+          // Non-binary fields
+          if (field.name === "Ciphertext") {
+            // Shouldn't reach here since ciphertext is stored as binary, but keep safe
+            const n = field.value.len || field.size;
+            return `<span class="badge"><span class="placeholder" aria-hidden="true"></span> <span class="dim">omitted</span> — ${n} bytes</span>`;
+          }
+          return `<div class="value">${field.value}</div>`;
+        }
+      }
+      function badge({ kind, text }) {
+        const cls = kind === "ok" ? "ok" : kind === "warn" ? "warn" : "bad";
+        const emoji = kind === "ok" ? "✔" : "!";
+        return `<span class="badge ${cls}" role="status" aria-live="polite">${emoji}&nbsp; ${text}</span>`;
+      }
+
+      function render(out) {
+        const tbody = $("#tbody");
+        if (!out || !out.fields || !out.fields.length) {
+          tbody.innerHTML = `<tr><td class="dim" colspan="4">No data yet. Paste or drop a file to begin.</td></tr>`;
+          $("#alerts").innerHTML = "";
+          return;
+        }
+        tbody.innerHTML = out.fields
+          .map(
+            (f) => `
+    <tr>
+      <td>${f.name}</td>
+      <td class="mono dim">${fmtOffset(f.offset)}</td>
+      <td class="mono dim">${fmtSize(f.size)}</td>
+      <td>${(() => {
+        const isChecksum = f.name.startsWith("Checksum (MD5");
+        const status = out.meta && out.meta.md5Status;
+        if (!isChecksum || !status) return renderValue(f);
+        const badge = `<span class="badge ${status.ok ? "ok" : "bad"}">${
+          status.ok ? "✅ Checksum passed" : "❌ Checksum failed"
+        }</span>`;
+        const details = status.ok
+          ? ""
+          : `<div class="mono dim">Expected (hex)</div>
+                   <div class="value mono">${status.expectedHex}</div>
+                   <div class="mono dim">Actual (hex)</div>
+                   <div class="value mono">${status.computedHex}</div>`;
+        return `<div style="display:flex; flex-direction:column; gap:8px">${renderValue(
+          f
+        )}${badge}${details}</div>`;
+      })()}</td>
+    </tr>
+  `
+          )
+          .join("");
+        $("#alerts").innerHTML = out.alerts.map(badge).join("");
+      }
+
+      /* ---------- Wiring: inputs ---------- */
+      let currentBytes = null;
+      async function updateFromBytes(bytes, srcLabel) {
+        currentBytes = bytes;
+        const result = parseD1(bytes);
+        render(result);
+        // File stats area
+        $("#statStatus").textContent = result.ok ? "Parsed" : "Errors";
+        $("#statStatus").style.color = result.ok ? "var(--ok)" : "var(--bad)";
+        if (srcLabel) {
+          $("#statName").textContent = srcLabel;
+          $("#statSize").textContent = `${bytes.length} B`;
+        }
+
+        // Compute and report MD5 checksum match if possible
+        try {
+          if (bytes.length >= 16 && typeof md5 !== "undefined") {
+            // Hash all bytes except the final 16 checksum bytes
+            const expected = bytes.subarray(bytes.length - 16);
+            const body = bytes.subarray(0, bytes.length - 16);
+            // Debug: log exactly what we're hashing
+            try {
+              console.log("[D1] MD5 input length:", body.length);
+              console.log("[D1] MD5 input (hex):", toHex(body));
+            } catch {}
+            let computedHex = null;
+            const buf = body.buffer.slice(
+              body.byteOffset,
+              body.byteOffset + body.byteLength
+            );
+            if (md5) {
+              computedHex = md5.hex(buf);
+            }
+            if (typeof computedHex === "string") {
+              const expectedHex = toHex(expected).toLowerCase();
+              try {
+                console.log("[D1] Expected checksum (hex):", expectedHex);
+                console.log(
+                  "[D1] Computed MD5 (hex):",
+                  computedHex.toLowerCase()
+                );
+              } catch {}
+              const ok = computedHex.toLowerCase() === expectedHex;
+              result.meta.md5Status = { ok, expectedHex, computedHex };
+              render(result);
+            }
+          }
+        } catch (e) {
+          // Silent failure; leave badge off
+        }
+      }
+
+      function tryParseFromText() {
+        const txt = $("#paste").value;
+        const kind = detectEncoding(txt).kind;
+        const badge = $("#inputKind");
+        if (kind === "empty") {
+          badge.textContent = "No input";
+          render(null);
+          return;
+        }
+        if (kind === "unknown") {
+          badge.innerHTML =
+            '<span class="err">Unrecognized input (not valid hex/base64)</span>';
+          render(null);
+          return;
+        }
+        badge.textContent = `Detected ${kind.toUpperCase()}`;
+        try {
+          const bytes =
+            kind === "hex" ? bytesFromHex(txt) : bytesFromBase64(txt);
+          updateFromBytes(bytes, `pasted ${kind}`);
+          $("#statName").textContent = "—";
+          $("#statSize").textContent = "—";
+        } catch (e) {
+          badge.innerHTML = `<span class="err">${e.message}</span>`;
+          render(null);
+        }
+      }
+
+      /* Paste area */
+      $("#paste").addEventListener("input", tryParseFromText);
+      $("#clear").addEventListener("click", () => {
+        $("#paste").value = "";
+        $("#inputKind").textContent = "No input";
+        render(null);
+      });
+
+      /* File input & drag-drop */
+      $("#file").addEventListener("change", (e) => {
+        const f = e.target.files[0];
+        if (!f) return;
+        const r = new FileReader();
+        r.onload = () => updateFromBytes(new Uint8Array(r.result), f.name);
+        r.readAsArrayBuffer(f);
+      });
+      const drop = $("#drop");
+      ["dragenter", "dragover"].forEach((ev) =>
+        drop.addEventListener(ev, (e) => {
+          e.preventDefault();
+          drop.classList.add("dragover");
+        })
+      );
+      ["dragleave", "drop"].forEach((ev) =>
+        drop.addEventListener(ev, (e) => {
+          e.preventDefault();
+          drop.classList.remove("dragover");
+        })
+      );
+      drop.addEventListener("drop", (e) => {
+        const f = e.dataTransfer.files[0];
+        if (!f) return;
+        const r = new FileReader();
+        r.onload = () => updateFromBytes(new Uint8Array(r.result), f.name);
+        r.readAsArrayBuffer(f);
+      });
+
+      /* Encoding toggle */
+      $("#toHex").addEventListener("click", () => {
+        encState.mode = "hex";
+        $("#toHex").classList.add("active");
+        $("#toHex").setAttribute("aria-selected", "true");
+        $("#toB64").classList.remove("active");
+        $("#toB64").setAttribute("aria-selected", "false");
+        $("#toUtf8").classList.remove("active");
+        $("#toUtf8").setAttribute("aria-selected", "false");
+        if (currentBytes) render(parseD1(currentBytes));
+      });
+      $("#toB64").addEventListener("click", () => {
+        encState.mode = "base64";
+        $("#toB64").classList.add("active");
+        $("#toB64").setAttribute("aria-selected", "true");
+        $("#toHex").classList.remove("active");
+        $("#toHex").setAttribute("aria-selected", "false");
+        $("#toUtf8").classList.remove("active");
+        $("#toUtf8").setAttribute("aria-selected", "false");
+        if (currentBytes) render(parseD1(currentBytes));
+      });
+      $("#toUtf8").addEventListener("click", () => {
+        encState.mode = "utf8";
+        $("#toUtf8").classList.add("active");
+        $("#toUtf8").setAttribute("aria-selected", "true");
+        $("#toHex").classList.remove("active");
+        $("#toHex").setAttribute("aria-selected", "false");
+        $("#toB64").classList.remove("active");
+        $("#toB64").setAttribute("aria-selected", "false");
+        if (currentBytes) render(parseD1(currentBytes));
+      });
+
+      /* Show/hide ciphertext toggle */
+      const ctBtn = $("#toggleCiphertext");
+      ctBtn.addEventListener("click", () => {
+        showCiphertext = !showCiphertext;
+        ctBtn.classList.toggle("active", showCiphertext);
+        ctBtn.setAttribute("aria-pressed", String(!!showCiphertext));
+        ctBtn.textContent = showCiphertext
+          ? "Hide ciphertext"
+          : "Show ciphertext";
+        if (currentBytes) render(parseD1(currentBytes));
+      });
+
+      /* Keyboard paste convenience: if user pastes when textarea isn't focused */
+      window.addEventListener("paste", (e) => {
+        if (document.activeElement !== $("#paste")) {
+          const text = e.clipboardData.getData("text/plain");
+          if (text && text.length > 0) {
+            $("#paste").value = text;
+            tryParseFromText();
+          }
+        }
+      });
+
+      /* Demo: if URL has ?hex= or ?b64= param, auto-fill */
+      (function preloadFromQuery() {
+        const p = new URLSearchParams(location.search);
+        if (p.has("hex")) {
+          $("#paste").value = p.get("hex");
+          tryParseFromText();
+        }
+        if (p.has("b64")) {
+          $("#paste").value = p.get("b64");
+          tryParseFromText();
+        }
+      })();
+    </script>
+  </body>
+</html>

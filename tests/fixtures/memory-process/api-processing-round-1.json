@@ -1,0 +1,18 @@
+{
+  "status": "processing",
+  "tool_calls": [
+    {
+      "id": "tc-1",
+      "type": "function",
+      "function": {
+        "name": "in_house_memory",
+        "arguments": "{\"command\":\"create\",\"content\":\"User prefers afternoon walks and decaf coffee.\"}"
+      }
+    }
+  ],
+  "continuation": {
+    "memories": [],
+    "memories_queue": [],
+    "conversation_history": []
+  }
+}

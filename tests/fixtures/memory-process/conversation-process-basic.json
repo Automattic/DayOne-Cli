@@ -1,0 +1,20 @@
+{
+  "conversation": {
+    "messages": [
+      {
+        "id": "m1",
+        "role": "user",
+        "content": "I prefer afternoon walks and decaf coffee."
+      },
+      {
+        "id": "m2",
+        "role": "assistant",
+        "content": "Noted. I will remember that."
+      }
+    ],
+    "last_memory_check_message_id": null
+  },
+  "date": "2026-04-08",
+  "timezone": "UTC",
+  "locale": "en-US"
+}

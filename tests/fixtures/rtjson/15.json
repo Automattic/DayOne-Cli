@@ -1,0 +1,27 @@
+{
+  "contents": [
+    {
+      "attributes": {},
+      "text": "15 - A tiny embedded photo\n"
+    },
+    {
+      "embeddedObjects": [
+        {
+          "type": "photo",
+          "identifier": "260A4B6206A74F67B93EB90DE9640DC2"
+        }
+      ]
+    },
+    {
+      "text": ""
+    }
+  ],
+  "meta": {
+    "version": 1,
+    "created": {
+      "version": 1775035146,
+      "platform": "webapp"
+    },
+    "small-lines-removed": true
+  }
+}

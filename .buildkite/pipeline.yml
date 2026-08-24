@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/buildkite/pipeline-schema/main/schema.json
+---
+
+agents:
+  queue: mac
+
+env:
+  IMAGE_ID: $IMAGE_ID
+
+steps:
+  - group: ":apple: macOS"
+    key: macos
+    steps:
+      - label: "Build, sign, notarize (arm64)"
+        key: macos-arm64
+        command: .buildkite/commands/build-sign-notarize.sh aarch64-apple-darwin dayone-darwin-arm64
+        plugins: [$CI_TOOLKIT_PLUGIN]
+        artifact_paths:
+          - dist/*
+        notify:
+          - github_commit_status:
+              context: Build, Sign & Notarize (arm64)
+
+      # ONNX Runtime ships no prebuilt macOS x64 binaries, so this build drops
+      # embeddings in the published Intel package.
+      - label: "Build, sign, notarize (x64)"
+        key: macos-x64
+        command: >-
+          .buildkite/commands/build-sign-notarize.sh x86_64-apple-darwin dayone-darwin-x64
+          --no-default-features --features production-default,telemetry
+        plugins: [$CI_TOOLKIT_PLUGIN]
+        artifact_paths:
+          - dist/*
+        notify:
+          - github_commit_status:
+              context: Build, Sign & Notarize (x64)

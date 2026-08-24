@@ -1,0 +1,16 @@
+{
+  "contents": [
+    {
+      "attributes": {},
+      "text": "01 - This is plain text with a single paragraph"
+    }
+  ],
+  "meta": {
+    "version": 1,
+    "created": {
+      "version": 1775035146,
+      "platform": "webapp"
+    },
+    "small-lines-removed": true
+  }
+}

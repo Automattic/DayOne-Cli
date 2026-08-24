@@ -1,0 +1,64 @@
+[package]
+name = "dayone"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-or-later"
+
+[features]
+default = ["production-default", "telemetry", "embeddings"]
+production-default = []
+telemetry = ["dep:sentry", "dep:regex"]
+embeddings = ["dep:fastembed"]
+
+[dependencies]
+anyhow = "1"
+aes-gcm = "0.11"
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
+dirs = "6"
+flate2 = "1"
+hostname = "0.4"
+pbkdf2 = "0.12"
+reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "native-tls", "query"] }
+rpassword = "7"
+rsa = { version = "0.9", features = ["sha1"] }
+rusqlite = { version = "0.36", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+sha2 = { version = "0.10", features = ["oid"] }
+tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread"] }
+md-5 = "0.10"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+time = { version = "0.3.47", features = ["formatting", "parsing", "local-offset"] }
+tokio-util = { version = "0.7.18", features = ["io"] }
+futures-util = "0.3.32"
+http-body-util = "0.1.3"
+http-body = "1.0.1"
+sqlite-vec = "0.1.7"
+fastembed = { version = "5.13.0", optional = true, default-features = false, features = ["hf-hub-native-tls", "ort-download-binaries-native-tls"] }
+lopdf = { version = "0.44.0", default-features = false }
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "linux-native"] }
+thiserror = "2.0.18"
+dotenvy = "0.15"
+comrak = { version = "0.51", default-features = false }
+toml = "1.1.1"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_28"] }
+crossterm = "0.28"
+termimad = "0.35"
+ansi-to-tui = "8"
+lru = "0.18.2"
+unicode-width = "0.2"
+sentry = { version = "0.48", optional = true, default-features = false, features = ["backtrace", "contexts", "panic", "anyhow", "debug-images", "ureq", "native-tls"] }
+regex = { version = "1", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Keep aligned with keyring's apple-native backend; native errors are downcast in the adapter.
+security-framework = "3.7"
+
+[dev-dependencies]
+proptest = "1"
+tempfile = "3.27.0"

@@ -1,0 +1,73 @@
+{
+  "contents": [
+    {
+      "attributes": {
+        "line": {
+          "header": 1
+        }
+      },
+      "text": "20 - Table\n"
+    },
+    {
+      "embeddedObjects": [
+        {
+          "type": "table",
+          "rows": [
+            [
+              {
+                "content": [
+                  {
+                    "attributes": {
+                      "italic": true
+                    },
+                    "text": "Food"
+                  }
+                ]
+              },
+              {
+                "content": [
+                  {
+                    "attributes": {},
+                    "text": "Place"
+                  }
+                ]
+              }
+            ],
+            [
+              {
+                "content": [
+                  {
+                    "attributes": {},
+                    "text": "Pizza"
+                  }
+                ]
+              },
+              {
+                "content": [
+                  {
+                    "attributes": {
+                      "bold": true
+                    },
+                    "text": "NYC"
+                  }
+                ]
+              }
+            ]
+          ],
+          "markdown": "| _Food_ | Place |\n| --- | --- |\n| Pizza | **NYC** |"
+        }
+      ]
+    },
+    {
+      "text": ""
+    }
+  ],
+  "meta": {
+    "version": 1,
+    "created": {
+      "version": 1775035146,
+      "platform": "webapp"
+    },
+    "small-lines-removed": true
+  }
+}

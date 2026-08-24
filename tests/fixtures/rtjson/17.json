@@ -1,0 +1,27 @@
+{
+  "contents": [
+    {
+      "attributes": {},
+      "text": "17 - PDF\n"
+    },
+    {
+      "embeddedObjects": [
+        {
+          "type": "pdfAttachment",
+          "identifier": "7ABB86054D994E939ACAA3828B57A270"
+        }
+      ]
+    },
+    {
+      "text": ""
+    }
+  ],
+  "meta": {
+    "version": 1,
+    "created": {
+      "version": 1775035146,
+      "platform": "webapp"
+    },
+    "small-lines-removed": true
+  }
+}

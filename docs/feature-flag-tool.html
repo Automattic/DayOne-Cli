@@ -1,0 +1,2199 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Feature Flags</title>
+    <style>
+      /* =================================
+           RESET AND BASE STYLES
+           ================================= */
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        /* Modern system font stack for cross-platform consistency */
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Oxygen, Ubuntu, Cantarell, sans-serif;
+        line-height: 1.6;
+        color: #333;
+        background-color: #f5f5f5;
+        padding: 20px;
+      }
+
+      /* =================================
+           LAYOUT CONTAINERS
+           ================================= */
+
+      .container {
+        /* Large max-width to accommodate wide hex/binary displays */
+        max-width: 2400px;
+        margin: 0 auto;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        padding: 40px;
+      }
+
+      h1 {
+        text-align: center;
+        margin-bottom: 30px;
+        color: #2c3e50;
+        font-size: 2rem;
+      }
+
+      .main-layout {
+        display: flex;
+        gap: 30px;
+        flex-wrap: wrap;
+      }
+
+      .section {
+        flex: 1;
+        min-width: 300px;
+        padding: 25px;
+        border: 2px solid #e1e8ed;
+        border-radius: 8px;
+        background-color: #fafbfc;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .section h2 {
+        margin-bottom: 20px;
+        color: #34495e;
+        font-size: 1.4rem;
+        border-bottom: 2px solid #3498db;
+        padding-bottom: 8px;
+      }
+
+      .input-group {
+        margin-bottom: 20px;
+      }
+
+      /* Make the feature flags input group expand to fill available space */
+      #feature-flags-section .input-group {
+        display: flex;
+        flex-direction: column;
+        flex-grow: 1;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 600;
+        color: #2c3e50;
+        font-size: 0.95rem;
+      }
+
+      input[type="text"],
+      input[type="number"],
+      textarea {
+        width: 100%;
+        padding: 12px 15px;
+        border: 2px solid #bdc3c7;
+        border-radius: 6px;
+        font-size: 1rem;
+        transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        background-color: white;
+        font-family: inherit;
+      }
+
+      input[type="text"]:focus,
+      input[type="number"]:focus,
+      textarea:focus {
+        outline: none;
+        border-color: #3498db;
+        box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+      }
+
+      input[type="text"]:invalid,
+      input[type="number"]:invalid,
+      textarea:invalid {
+        border-color: #e74c3c;
+      }
+
+      .input-error {
+        border-color: #e74c3c !important;
+        box-shadow: 0 0 0 3px rgba(231, 76, 60, 0.1) !important;
+      }
+
+      .binary-builder-disabled {
+        opacity: 0.5;
+        pointer-events: none;
+      }
+
+      .bit-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 12px;
+        margin-bottom: 20px;
+        padding: 15px;
+        background-color: #ecf0f1;
+        border-radius: 6px;
+      }
+
+      .bit-group {
+        display: flex;
+        align-items: center;
+        padding: 8px 12px;
+        background-color: white;
+        border-radius: 4px;
+        border: 1px solid #d5dbdb;
+        transition: background-color 0.2s ease;
+      }
+
+      .bit-group:hover,
+      .bit-group:focus {
+        background-color: #f8f9fa;
+        box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.15);
+      }
+
+      .bit-group input[type="checkbox"] {
+        margin-right: 8px;
+        width: 18px;
+        height: 18px;
+        accent-color: #3498db;
+        cursor: pointer;
+      }
+
+      .bit-group label {
+        margin: 0;
+        cursor: pointer;
+        font-size: 0.9rem;
+        font-weight: 500;
+      }
+
+      /* =================================
+           BINARY BUILDER - Interactive Bit Toggles
+           
+           This section allows users to visually toggle
+           individual bits and see real-time hex conversion.
+           MSB (Most Significant Bit) is on the left,
+           LSB (Least Significant Bit) is on the right.
+           ================================= */
+
+      .binary-builder-container {
+        display: grid;
+        /* 8 columns for typical display, responsive breakpoints adjust this */
+        grid-template-columns: repeat(8, 1fr);
+        gap: 8px;
+        padding: 20px;
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        border: 2px solid #e9ecef;
+        margin-bottom: 15px;
+      }
+
+      .bit-toggle {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 10px 6px;
+        background-color: white;
+        border-radius: 6px;
+        border: 2px solid #dee2e6;
+        transition: all 0.2s ease;
+        cursor: pointer;
+        min-height: 80px;
+        justify-content: space-between;
+      }
+
+      /* Add keyboard focus styles for bit toggles */
+      .bit-toggle:focus {
+        outline: 3px solid #3498db;
+        outline-offset: 2px;
+      }
+
+      .bit-toggle:hover {
+        border-color: #3498db;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(52, 152, 219, 0.15);
+      }
+
+      .bit-toggle.active {
+        background-color: #3498db;
+        border-color: #2980b9;
+        color: white;
+      }
+
+      .bit-toggle.active:hover {
+        background-color: #2980b9;
+        border-color: #21618c;
+      }
+
+      .bit-position {
+        font-size: 0.75rem;
+        font-weight: 600;
+        margin-bottom: 4px;
+        opacity: 0.8;
+      }
+
+      .bit-value {
+        font-size: 1.5rem;
+        font-weight: bold;
+        font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace;
+        margin: 4px 0;
+      }
+
+      .bit-power {
+        font-size: 0.7rem;
+        opacity: 0.7;
+        text-align: center;
+        line-height: 1.2;
+      }
+
+      /* 4-bit group separators */
+      .bit-toggle:nth-child(4n) {
+        margin-right: 12px;
+      }
+
+      /* =================================
+           RESPONSIVE DESIGN
+           
+           Mobile-first responsive design with specific
+           breakpoints for optimal UX across devices.
+           ================================= */
+
+      /* Large screens: Stack sections vertically */
+      @media (max-width: 1200px) {
+        .main-layout {
+          flex-direction: column;
+        }
+      }
+
+      @media (max-width: 1024px) {
+        .binary-builder-container {
+          grid-template-columns: repeat(4, 1fr);
+          gap: 6px;
+          padding: 15px;
+        }
+
+        .bit-toggle:nth-child(4n) {
+          margin-right: 0;
+        }
+
+        .bit-toggle:nth-child(4n):after {
+          content: "";
+          grid-column: 1 / -1;
+          height: 8px;
+        }
+      }
+
+      @media (max-width: 768px) {
+        .binary-builder-container {
+          grid-template-columns: repeat(4, 1fr);
+          gap: 4px;
+          padding: 10px;
+        }
+
+        .bit-toggle {
+          min-height: 60px;
+          padding: 6px 4px;
+        }
+
+        .bit-value {
+          font-size: 1.2rem;
+        }
+
+        .bit-position {
+          font-size: 0.65rem;
+        }
+
+        .bit-power {
+          font-size: 0.6rem;
+        }
+      }
+
+      /* =================================
+           FEATURE FLAGS - Checkbox List
+           
+           Scrollable container for feature flag checkboxes.
+           Each flag represents a bit position in the hex value.
+           Features are added over time from LSB to MSB.
+           ================================= */
+
+      .feature-flags-container {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+        padding: 15px;
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        border: 2px solid #e9ecef;
+        margin-bottom: 15px;
+        /* Expand to fill available space */
+        flex-grow: 1;
+        overflow-y: auto;
+      }
+
+      .feature-flag-item {
+        display: flex;
+        align-items: center;
+        padding: 12px 15px;
+        background-color: white;
+        border-radius: 6px;
+        border: 2px solid #dee2e6;
+        transition: all 0.2s ease;
+        cursor: pointer;
+      }
+
+      /* Add keyboard focus styles for feature flag items */
+      .feature-flag-item:focus {
+        outline: 3px solid #3498db;
+        outline-offset: 2px;
+      }
+
+      .feature-flag-item:hover,
+      .feature-flag-item:focus {
+        border-color: #3498db;
+        background-color: #f8f9fa;
+        box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.15);
+      }
+
+      .feature-flag-item.active {
+        background-color: #e3f2fd;
+        border-color: #2196f3;
+      }
+
+      .feature-flag-item .checkbox {
+        margin-right: 12px;
+        width: 20px;
+        height: 20px;
+        accent-color: #3498db;
+        cursor: pointer;
+      }
+
+      .feature-flag-details {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .feature-flag-name {
+        font-weight: 600;
+        font-size: 0.95rem;
+        color: #2c3e50;
+      }
+
+      .feature-flag-hex {
+        font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace;
+        font-size: 0.85rem;
+        color: #7f8c8d;
+        font-weight: 500;
+      }
+
+      .feature-flag-description {
+        font-size: 0.8rem;
+        color: #5a6c7d;
+        line-height: 1.4;
+        margin-top: 2px;
+      }
+
+      .deprecated {
+        opacity: 0.6;
+      }
+
+      .deprecated .feature-flag-name::after {
+        content: " (Deprecated)";
+        color: #e74c3c;
+        font-size: 0.8rem;
+        font-weight: 400;
+      }
+
+      @media (max-width: 768px) {
+        .feature-flags-container {
+          padding: 10px;
+          gap: 6px;
+        }
+
+        .feature-flag-item {
+          padding: 10px 12px;
+        }
+
+        .feature-flag-name {
+          font-size: 0.9rem;
+        }
+
+        .feature-flag-hex {
+          font-size: 0.8rem;
+        }
+
+        .feature-flag-description {
+          font-size: 0.75rem;
+        }
+      }
+
+      .error-message {
+        background-color: #fdf2f2;
+        color: #e74c3c;
+        padding: 12px 15px;
+        border-radius: 6px;
+        border-left: 4px solid #e74c3c;
+        margin-top: 10px;
+        font-size: 0.9rem;
+        display: none;
+      }
+
+      .error-message.show {
+        display: block;
+      }
+
+      .result-display {
+        background-color: #eef7ff;
+        border: 2px solid #3498db;
+        border-radius: 6px;
+        padding: 15px;
+        margin-top: 20px;
+        font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace;
+        font-size: 1.1rem;
+        color: #2c3e50;
+        word-break: break-all;
+      }
+
+      .buttons {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-top: 20px;
+      }
+
+      button {
+        padding: 12px 24px;
+        border: none;
+        border-radius: 6px;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background-color 0.3s ease, transform 0.1s ease;
+      }
+      /* Allow anchor links to look like buttons in the header */
+      .header a.btn-primary,
+      .header a.btn-secondary {
+        display: inline-block;
+        padding: 12px 24px;
+        border-radius: 6px;
+        font-size: 1rem;
+        font-weight: 600;
+        text-decoration: none;
+      }
+
+      /* Ensure clear visual focus on each button for accessibility */
+      button:focus {
+        outline: 2px solid #3498db;
+        outline-offset: 2px;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+      }
+
+      button:active {
+        transform: translateY(0);
+      }
+
+      .btn-primary {
+        background-color: #3498db;
+        color: white;
+      }
+
+      .btn-primary:hover {
+        background-color: #2980b9;
+      }
+
+      .btn-secondary {
+        background-color: #95a5a6;
+        color: white;
+      }
+
+      .btn-secondary:hover {
+        background-color: #7f8c8d;
+      }
+
+      .btn-danger {
+        background-color: #e74c3c;
+        color: white;
+      }
+
+      .btn-danger:hover {
+        background-color: #c0392b;
+      }
+
+      /* Responsive design for narrow screens */
+      @media (max-width: 768px) {
+        .container {
+          padding: 20px;
+        }
+
+        .main-layout {
+          flex-direction: column;
+          gap: 20px;
+        }
+
+        .section {
+          min-width: auto;
+          padding: 20px;
+        }
+
+        h1 {
+          font-size: 1.6rem;
+        }
+
+        .section h2 {
+          font-size: 1.2rem;
+        }
+
+        .bit-grid {
+          grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+          gap: 8px;
+        }
+
+        .buttons {
+          justify-content: center;
+        }
+
+        button {
+          flex: 1;
+          min-width: 120px;
+        }
+      }
+
+      @media (max-width: 480px) {
+        body {
+          padding: 10px;
+        }
+
+        .container {
+          padding: 15px;
+        }
+
+        .section {
+          padding: 15px;
+        }
+
+        .bit-grid {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+
+      /* =================================
+           ACCESSIBILITY ENHANCEMENTS
+           
+           Respect user preferences for motion and contrast.
+           Ensures keyboard navigation is visible and usable.
+           ================================= */
+
+      /* Reduce motion for users who prefer it */
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+
+      /* High contrast mode support for better visibility */
+      @media (prefers-contrast: high) {
+        .section {
+          border-color: #000;
+        }
+
+        input[type="text"],
+        input[type="number"] {
+          border-color: #000;
+        }
+
+        .bit-group {
+          border-color: #000;
+        }
+      }
+      /* =================================
+           THEME TOGGLE HEADER
+           ================================= */
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 30px;
+      }
+
+      /* =================================
+           DARK THEME OVERRIDES
+           ================================= */
+      :root {
+        color-scheme: light dark;
+      }
+      [data-theme="dark"] {
+        color-scheme: dark;
+      }
+      [data-theme="dark"] body {
+        background-color: #0d1117;
+        color: #c9d1d9;
+      }
+      [data-theme="dark"] .container {
+        background: #0d1117;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
+      }
+      [data-theme="dark"] h1 {
+        color: #e6edf3;
+      }
+      [data-theme="dark"] .section {
+        background-color: #161b22;
+        border-color: #30363d;
+      }
+      [data-theme="dark"] .section h2 {
+        color: #e6edf3;
+        border-bottom-color: #1f6feb;
+      }
+      [data-theme="dark"] label {
+        color: #e6edf3;
+      }
+      [data-theme="dark"] input[type="text"],
+      [data-theme="dark"] input[type="number"],
+      [data-theme="dark"] textarea {
+        background-color: #0d1117;
+        color: #c9d1d9;
+        border-color: #30363d;
+      }
+      [data-theme="dark"] input[type="text"]:focus,
+      [data-theme="dark"] input[type="number"]:focus,
+      [data-theme="dark"] textarea:focus {
+        border-color: #1f6feb;
+        box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.25);
+      }
+      [data-theme="dark"] input[type="text"]:invalid,
+      [data-theme="dark"] input[type="number"]:invalid,
+      [data-theme="dark"] textarea:invalid {
+        border-color: #da3633;
+      }
+      [data-theme="dark"] .bit-grid {
+        background-color: #0f141a;
+        border-color: #30363d;
+      }
+      [data-theme="dark"] .bit-group {
+        background-color: #0d1117;
+        border-color: #30363d;
+      }
+      [data-theme="dark"] .bit-group:hover,
+      [data-theme="dark"] .bit-group:focus {
+        background-color: #1f242d;
+        box-shadow: 0 0 0 2px rgba(31, 111, 235, 0.25);
+      }
+      [data-theme="dark"] .bit-group input[type="checkbox"],
+      [data-theme="dark"] .feature-flag-item .checkbox {
+        accent-color: #1f6feb;
+      }
+      [data-theme="dark"] .binary-builder-container {
+        background-color: #0f141a;
+        border-color: #30363d;
+      }
+      [data-theme="dark"] .bit-toggle {
+        background-color: #0d1117;
+        border-color: #30363d;
+        color: #c9d1d9;
+      }
+      [data-theme="dark"] .bit-toggle:hover {
+        border-color: #1f6feb;
+        box-shadow: 0 2px 8px rgba(31, 111, 235, 0.25);
+      }
+      [data-theme="dark"] .bit-toggle.active {
+        background-color: #1f6feb;
+        border-color: #1f6feb;
+        color: #ffffff;
+      }
+      [data-theme="dark"] .feature-flags-container {
+        background-color: #0f141a;
+        border-color: #30363d;
+      }
+      [data-theme="dark"] .feature-flag-item {
+        background-color: #0d1117;
+        border-color: #30363d;
+      }
+      [data-theme="dark"] .feature-flag-item:hover,
+      [data-theme="dark"] .feature-flag-item:focus {
+        border-color: #1f6feb;
+        background-color: #1f242d;
+        box-shadow: 0 0 0 2px rgba(31, 111, 235, 0.25);
+      }
+      [data-theme="dark"] .feature-flag-item.active {
+        background-color: #0f2342;
+        border-color: #1f6feb;
+      }
+      [data-theme="dark"] .feature-flag-name {
+        color: #e6edf3;
+      }
+      [data-theme="dark"] .feature-flag-hex {
+        color: #8b949e;
+      }
+      [data-theme="dark"] .feature-flag-description {
+        color: #9aa7b2;
+      }
+      [data-theme="dark"] .error-message {
+        background-color: #2c1517;
+        color: #ffa198;
+        border-left-color: #ffa198;
+      }
+      [data-theme="dark"] .result-display {
+        background-color: #0f2342;
+        border-color: #1f6feb;
+        color: #c9d1d9;
+      }
+      [data-theme="dark"] .btn-primary {
+        background-color: #1f6feb;
+        color: #ffffff;
+      }
+      [data-theme="dark"] .btn-primary:hover {
+        background-color: #1b62d1;
+      }
+      [data-theme="dark"] .btn-secondary {
+        background-color: #57606a;
+        color: #ffffff;
+      }
+      [data-theme="dark"] .btn-secondary:hover {
+        background-color: #484f58;
+      }
+      [data-theme="dark"] .btn-danger {
+        background-color: #da3633;
+        color: #ffffff;
+      }
+      [data-theme="dark"] .btn-danger:hover {
+        background-color: #b02a2a;
+      }
+      [data-theme="dark"] button:focus {
+        outline-color: #1f6feb;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>Feature Flags - Hex & Binary Converter</h1>
+        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+          <a
+            href="entry-body-format.md#feature-flags"
+            class="btn-primary"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open the entry feature flags documentation"
+          >Requirements Spec</a>
+          <button type="button" id="theme-toggle" class="btn-secondary" aria-label="Toggle dark mode" aria-pressed="false">Dark mode</button>
+        </div>
+      </div>
+
+      <div class="main-layout">
+        <!-- Hex Input Section -->
+        <div class="section" id="hex-section">
+          <h2>Hex Input</h2>
+
+          <div class="input-group">
+            <label for="hex-input">Enter Hexadecimal Value:</label>
+            <textarea
+              id="hex-input"
+              placeholder="e.g., 1a2b, ff00, 0x1234"
+              maxlength="16"
+              rows="2"
+              style="resize: vertical; min-height: 45px"
+            ></textarea>
+            <div class="error-message" id="hex-error">
+              Please enter a valid hexadecimal value.
+            </div>
+          </div>
+
+          <div class="buttons">
+            <button type="button" class="btn-primary" id="convert-hex">
+              Convert
+            </button>
+            <button type="button" class="btn-secondary" id="clear-hex">
+              Clear
+            </button>
+          </div>
+
+          <!-- 4-bit Grouped Hex Display -->
+          <div
+            class="result-display"
+            id="grouped-hex-result"
+            style="display: none"
+          >
+            <strong>4-bit Grouped Hex:</strong><br />
+            <span
+              id="grouped-hex-output"
+              style="
+                font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+                font-size: 1.2rem;
+                letter-spacing: 2px;
+              "
+            ></span>
+          </div>
+
+          <!-- Binary per 4-bit Nibble Display -->
+          <div
+            class="result-display"
+            id="nibble-binary-result"
+            style="display: none"
+          >
+            <strong>Binary per 4-bit Nibble:</strong><br />
+            <div
+              id="nibble-binary-output"
+              style="font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace"
+            ></div>
+          </div>
+
+          <!-- Full Binary String Display -->
+          <div
+            class="result-display"
+            id="full-binary-result"
+            style="display: none"
+          >
+            <strong>Full Binary String:</strong><br />
+            <span
+              id="full-binary-output"
+              style="
+                font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+                word-break: break-all;
+                font-size: 1.1rem;
+              "
+            ></span>
+          </div>
+
+          <!-- Bit Positions Table -->
+          <div
+            class="result-display"
+            id="bit-table-result"
+            style="display: none"
+          >
+            <strong>Individual Bit Positions:</strong><br />
+            <div
+              id="bit-table-container"
+              style="margin-top: 10px; max-height: 300px; overflow-y: auto"
+            >
+              <table
+                id="bit-positions-table"
+                style="
+                  width: 100%;
+                  border-collapse: collapse;
+                  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+                  font-size: 0.9rem;
+                "
+              >
+                <thead>
+                  <tr style="background-color: #34495e; color: white">
+                    <th
+                      style="
+                        padding: 8px;
+                        border: 1px solid #ddd;
+                        text-align: center;
+                      "
+                    >
+                      Position
+                    </th>
+                    <th
+                      style="
+                        padding: 8px;
+                        border: 1px solid #ddd;
+                        text-align: center;
+                      "
+                    >
+                      Power of 2
+                    </th>
+                    <th
+                      style="
+                        padding: 8px;
+                        border: 1px solid #ddd;
+                        text-align: center;
+                      "
+                    >
+                      Value
+                    </th>
+                    <th
+                      style="
+                        padding: 8px;
+                        border: 1px solid #ddd;
+                        text-align: center;
+                      "
+                    >
+                      Bit
+                    </th>
+                  </tr>
+                </thead>
+                <tbody id="bit-positions-body">
+                  <!-- Bit position rows will be generated by JavaScript -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Feature Flags Builder Section -->
+        <div class="section" id="feature-flags-section">
+          <h2>Feature Flags Builder</h2>
+
+          <div class="input-group">
+            <label>Select Features:</label>
+            <div class="feature-flags-container" id="feature-flags-container">
+              <!-- Feature flag checkboxes will be generated by JavaScript -->
+            </div>
+          </div>
+
+          <!-- Live Binary String Display (grouped in 4) -->
+          <div
+            class="result-display"
+            id="live-binary-display"
+            style="display: block; margin-top: 15px"
+          >
+            <strong>Live Binary String (4-bit groups):</strong><br />
+            <span
+              id="live-binary-output"
+              style="
+                font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+                font-size: 1.1rem;
+                letter-spacing: 1px;
+                word-break: break-all;
+              "
+              >0000 0000 0000 0000</span
+            >
+          </div>
+
+          <!-- Live Hex Conversion Display -->
+          <div
+            class="result-display"
+            id="live-hex-display"
+            style="display: block; margin-top: 10px"
+          >
+            <strong>Live Hex Value:</strong><br />
+            <span
+              id="live-hex-output"
+              style="
+                font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+                font-size: 1.2rem;
+                letter-spacing: 2px;
+              "
+              >0</span
+            >
+          </div>
+
+          <div class="buttons">
+            <button type="button" class="btn-secondary" id="clear-features">
+              Clear All
+            </button>
+            <button type="button" class="btn-primary" id="copy-hex-value">
+              Copy Hex
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // ===== THEME HANDLING =====
+      const themeToggleButton = document.getElementById("theme-toggle");
+      function getSystemPrefersDark() {
+        return (
+          window.matchMedia &&
+          window.matchMedia("(prefers-color-scheme: dark)").matches
+        );
+      }
+      function applyTheme(theme) {
+        document.documentElement.setAttribute("data-theme", theme);
+        if (themeToggleButton) {
+          const isDark = theme === "dark";
+          themeToggleButton.textContent = isDark ? "Light mode" : "Dark mode";
+          themeToggleButton.setAttribute("aria-pressed", isDark ? "true" : "false");
+          themeToggleButton.setAttribute(
+            "aria-label",
+            isDark ? "Switch to light mode" : "Switch to dark mode"
+          );
+        }
+      }
+      // Initialize theme immediately on script load using stored or system preference
+      (function initThemeEarly() {
+        try {
+          const stored = localStorage.getItem("featureFlagsTheme");
+          const theme = stored || (getSystemPrefersDark() ? "dark" : "light");
+          applyTheme(theme);
+        } catch (e) {
+          applyTheme(getSystemPrefersDark() ? "dark" : "light");
+        }
+      })();
+
+      // ===== CONVERSION UTILITY FUNCTIONS =====
+
+      // Bind events for Binary Builder → Hex display
+      function bindToggleEvents() {
+        const bitToggles = document.querySelectorAll(".bit-toggle");
+
+        bitToggles.forEach((toggle) => {
+          toggle.addEventListener("click", function () {
+            const bitValueElement = this.querySelector(".bit-value");
+            const currentValue = bitValueElement.textContent;
+            const newValue = currentValue === "1" ? "0" : "1";
+
+            bitValueElement.textContent = newValue;
+            this.classList.toggle("active", newValue === "1");
+
+            updateBinaryFromToggles();
+          });
+        });
+      }
+
+      function updateBinaryFromToggles() {
+        const bitToggles = document.querySelectorAll(".bit-toggle");
+        let binaryString = "";
+
+        // Build binary string from toggles (left to right = MSB to LSB)
+        bitToggles.forEach((toggle) => {
+          const bitValue = toggle.querySelector(".bit-value").textContent;
+          binaryString += bitValue;
+        });
+
+        const groupedBinary = binaryString.match(/.{1,4}/g).join(" ");
+        const binaryBuilderOutput = document.getElementById(
+          "binary-builder-output"
+        );
+        binaryBuilderOutput.textContent = groupedBinary;
+
+        const hexValue = binToHex(binaryString);
+        const cleanHex = hexValue.replace("0x", "");
+
+        // Update hex input and displays
+        hexInput.value = cleanHex;
+        processValidHexInput(cleanHex);
+      }
+
+      /**
+       * Converts hexadecimal string to binary with grouped nibbles
+       * @param {string} hex - Hexadecimal string (with or without 0x prefix)
+       * @returns {Object} - Object containing groupedNibbles array and fullBin string
+       */
+      function hexToBin(hex) {
+        // Validate and clean hex input
+        if (!isValidHexInput(hex)) {
+          throw new Error("Invalid hexadecimal input");
+        }
+
+        const cleanedHex = cleanHexInput(hex);
+        const paddedHex = padToNibbles(cleanedHex);
+
+        // Convert each nibble (4-bit group) to binary
+        const groupedNibbles = [];
+        for (let i = 0; i < paddedHex.length; i++) {
+          const nibble = paddedHex[i];
+          const binaryNibble = parseInt(nibble, 16)
+            .toString(2)
+            .padStart(4, "0");
+          groupedNibbles.push({
+            hex: nibble,
+            binary: binaryNibble,
+            decimal: parseInt(nibble, 16),
+          });
+        }
+
+        // Create full binary string
+        const fullBin = groupedNibbles.map((nibble) => nibble.binary).join("");
+
+        return {
+          groupedNibbles: groupedNibbles,
+          fullBin: fullBin,
+        };
+      }
+
+      /**
+       * Converts binary string to hexadecimal
+       * @param {string} bin - Binary string
+       * @returns {string} - Hexadecimal string (lowercase, no 0x prefix)
+       */
+      function binToHex(bin) {
+        // Validate binary input
+        if (!isValidBinaryInput(bin)) {
+          throw new Error("Invalid binary input");
+        }
+
+        // Clean and pad binary string
+        const cleanedBin = bin.replace(/\s/g, "");
+        const paddedBin = padBinaryToMultipleOfFour(cleanedBin);
+
+        // Convert binary to hex
+        let hexResult = "";
+        for (let i = 0; i < paddedBin.length; i += 4) {
+          const nibble = paddedBin.substr(i, 4);
+          const hexDigit = parseInt(nibble, 2).toString(16);
+          hexResult += hexDigit;
+        }
+
+        // Remove leading zeros, but keep a single zero if result is all zeros
+        const trimmed = hexResult.replace(/^0+(?=.)/, "");
+        return trimmed === "" ? "0" : trimmed;
+      }
+
+      /**
+       * Pads binary string to be a multiple of 4 bits
+       * @param {string} binary - Binary string
+       * @returns {string} - Padded binary string
+       */
+      function padBinaryToMultipleOfFour(binary) {
+        const remainder = binary.length % 4;
+        if (remainder === 0) {
+          return binary;
+        }
+        const paddingNeeded = 4 - remainder;
+        return "0".repeat(paddingNeeded) + binary;
+      }
+
+      /**
+       * Validates hexadecimal input
+       * @param {string} hex - Hexadecimal string to validate
+       * @returns {boolean} - True if valid hex input
+       */
+      function isValidHexInput(hex) {
+        if (typeof hex !== "string" || hex.trim().length === 0) {
+          return false;
+        }
+
+        const cleaned = hex.replace(/\s/g, "").toLowerCase();
+        const withoutPrefix = cleaned.startsWith("0x")
+          ? cleaned.slice(2)
+          : cleaned;
+
+        return /^[0-9a-f]+$/.test(withoutPrefix) && withoutPrefix.length > 0;
+      }
+
+      /**
+       * Validates binary input
+       * @param {string} bin - Binary string to validate
+       * @returns {boolean} - True if valid binary input
+       */
+      function isValidBinaryInput(bin) {
+        if (typeof bin !== "string" || bin.trim().length === 0) {
+          return false;
+        }
+
+        const cleaned = bin.replace(/\s/g, "");
+        return /^[01]+$/.test(cleaned);
+      }
+
+      /**
+       * Cleans hexadecimal input by removing whitespace and 0x prefix
+       * @param {string} hex - Hexadecimal string
+       * @returns {string} - Cleaned hexadecimal string (uppercase)
+       */
+      function cleanHexInput(hex) {
+        const cleaned = hex.replace(/\s/g, "").toLowerCase();
+        return cleaned.startsWith("0x") ? cleaned.slice(2) : cleaned;
+      }
+
+      /**
+       * Pads hex string to ensure it represents complete nibbles
+       * @param {string} hex - Hexadecimal string
+       * @returns {string} - Padded hexadecimal string
+       */
+      function padToNibbles(hex) {
+        // Each hex character represents exactly one nibble (4 bits)
+        // So no additional padding is needed beyond what's already there
+        return hex;
+      }
+
+      /**
+       * Splits a string into groups of specified length
+       * @param {string} str - String to split
+       * @param {number} groupSize - Size of each group (default: 4)
+       * @returns {Array<string>} - Array of string groups
+       */
+      function splitIntoGroups(str, groupSize = 4) {
+        const groups = [];
+        for (let i = 0; i < str.length; i += groupSize) {
+          groups.push(str.substr(i, groupSize));
+        }
+        return groups;
+      }
+
+      // ===== END CONVERSION UTILITY FUNCTIONS =====
+
+      // Feature flags data from the provided table
+      const featureFlags = [
+        {
+          hex: 0x0001,
+          name: "Multiple Attachments",
+          description: "This entry contains more than one attachment",
+        },
+        {
+          hex: 0x0002,
+          name: "GIF or PNG photos",
+          description:
+            "This entry contains GIF or PNG photos. (Originally, we only supported JPEG format)",
+        },
+        {
+          hex: 0x0004,
+          name: "Location User Label",
+          description:
+            "(Deprecated) The location on this entry has a userLabel. We no longer use this field for naming locations, so it's okay for clients to ignore this field.",
+          deprecated: true,
+        },
+        {
+          hex: 0x0008,
+          name: "Audio",
+          description: "This entry contains an audio attachment",
+        },
+        {
+          hex: 0x0010,
+          name: "Rich Text JSON",
+          description:
+            "This entry stores its content in rich text JSON, not markdown",
+        },
+        {
+          hex: 0x0020,
+          name: "Video",
+          description: "This entry contains a video attachment",
+        },
+        {
+          hex: 0x0040,
+          name: "Drawing",
+          description:
+            "This entry contains a photo that is flagged as a 'drawing'. (On iOS, we allow users to draw)",
+        },
+        {
+          hex: 0x0080,
+          name: "PDF",
+          description: "This entry contains a PDF attachment",
+        },
+        {
+          hex: 0x0100,
+          name: "Highlighting",
+          description:
+            "This entry contains text content with a highlighter effect.",
+        },
+        {
+          hex: 0x0200,
+          name: "Pinned",
+          description:
+            "This entry is pinned, and floats at the top of the timeline.",
+        },
+        {
+          hex: 0x0400,
+          name: "Test Flag",
+          description:
+            "This entry should always be flagged as containing 'unknown content'. This flag serves as a way to test the feature flags machinery within a client.",
+        },
+        {
+          hex: 0x0800,
+          name: "Entry Type",
+          description:
+            "This entry has a value for the entryType field. Entry types can be used to flag special entries. For example, in a new app we create an entry with a type of 'welcome-entry'.",
+        },
+        {
+          hex: 0x1000,
+          name: "Extended Embed Types (2023)",
+          description:
+            "This entry uses one of the following embed types, which were introduced along with support for the Apple Suggestions API: Contact, Location, Podcast, Song, Motion Activity (step count), Workout",
+        },
+        {
+          hex: 0x2000,
+          name: "Extended Embed Types V2 (2024, iOS 18)",
+          description:
+            "This entry uses one of the following embed types, which were introduced by Apple in iOS 18, as an update to the Apple Suggestions API: Generic Media, State of Mind, Or has a Motion Activity embed which includes the new movementType field.",
+        },
+        {
+          hex: 0x4000,
+          name: "Underlined",
+          description: "This entry contains text content with underlined text.",
+        },
+        {
+          hex: 0x8000,
+          name: "AI Extended Metadata",
+          description:
+            "This entry contains AI-generated metadata including information about the AI model and host used during creation",
+        },
+        {
+          hex: 0x10000,
+          name: "Route Data",
+          description:
+            "This entry contains extended location data to support route data.",
+        },
+        {
+          hex: 0x20000,
+          name: "Table",
+          description:
+            "This entry contains a table.",
+        }
+      ];
+
+      // DOM Elements
+      const hexInput = document.getElementById("hex-input");
+      const convertButton = document.getElementById("convert-hex");
+      const clearButton = document.getElementById("clear-hex");
+      const hexError = document.getElementById("hex-error");
+
+      const groupedHexResult = document.getElementById("grouped-hex-result");
+      const nibbleBinaryResult = document.getElementById(
+        "nibble-binary-result"
+      );
+      const fullBinaryResult = document.getElementById("full-binary-result");
+      const bitTableResult = document.getElementById("bit-table-result");
+
+      const groupedHexOutput = document.getElementById("grouped-hex-output");
+      const nibbleBinaryOutput = document.getElementById(
+        "nibble-binary-output"
+      );
+      const fullBinaryOutput = document.getElementById("full-binary-output");
+      const bitPositionsBody = document.getElementById("bit-positions-body");
+
+      // Feature flags elements
+      const featureFlagsContainer = document.getElementById(
+        "feature-flags-container"
+      );
+      const liveBinaryOutput = document.getElementById("live-binary-output");
+      const liveHexOutput = document.getElementById("live-hex-output");
+      const clearFeaturesButton = document.getElementById("clear-features");
+      const copyHexButton = document.getElementById("copy-hex-value");
+
+      let selectedFlags = new Set();
+
+      // Initialize feature flags UI
+      function initializeFeatureFlags() {
+        featureFlagsContainer.innerHTML = "";
+
+        featureFlags.forEach((flag, index) => {
+          const flagItem = document.createElement("div");
+          flagItem.className = `feature-flag-item ${
+            flag.deprecated ? "deprecated" : ""
+          }`;
+          flagItem.dataset.hex = flag.hex;
+
+          flagItem.innerHTML = `
+                    <input type="checkbox" class="checkbox" id="flag-${index}" data-hex="${
+            flag.hex
+          }">
+                    <div class="feature-flag-details">
+                        <div class="feature-flag-name">${flag.name}</div>
+                        <div class="feature-flag-hex">${formatFeatureHex(
+                          flag.hex
+                        )}</div>
+                        <div class="feature-flag-description">${
+                          flag.description
+                        }</div>
+                    </div>
+                `;
+
+          const checkbox = flagItem.querySelector(".checkbox");
+          checkbox.addEventListener("change", function () {
+            if (this.checked) {
+              selectedFlags.add(parseInt(this.dataset.hex));
+              flagItem.classList.add("active");
+            } else {
+              selectedFlags.delete(parseInt(this.dataset.hex));
+              flagItem.classList.remove("active");
+            }
+            updateLiveDisplays();
+          });
+
+          // Make the entire item focusable and add keyboard support
+          flagItem.setAttribute("tabindex", "0");
+          flagItem.setAttribute("role", "button");
+          flagItem.setAttribute("aria-pressed", "false");
+          flagItem.setAttribute(
+            "aria-label",
+            `Toggle ${flag.name} feature flag`
+          );
+
+          // Update aria attributes when checkbox state changes
+          const originalChangeHandler = checkbox.onchange;
+          checkbox.addEventListener("change", function () {
+            flagItem.setAttribute(
+              "aria-pressed",
+              this.checked ? "true" : "false"
+            );
+          });
+
+          // Make the entire item clickable
+          function toggleFlag(e) {
+            if (e.target.type !== "checkbox") {
+              checkbox.checked = !checkbox.checked;
+              checkbox.dispatchEvent(new Event("change"));
+            }
+          }
+
+          flagItem.addEventListener("click", toggleFlag);
+
+          // Add keyboard support (Space and Enter)
+          flagItem.addEventListener("keydown", function (e) {
+            if (e.key === " " || e.key === "Enter") {
+              e.preventDefault();
+              toggleFlag(e);
+            }
+          });
+
+          featureFlagsContainer.appendChild(flagItem);
+        });
+      }
+
+      // Format hex value consistently with proper padding
+      // Canonical EARS representation: lowercase hex string without 0x; '0' when no features
+      function formatCanonicalHex(value) {
+        if (!Number.isFinite(value) || value <= 0) return "0";
+        return value.toString(16);
+      }
+
+      // Pretty representation for bit constants in UI: 0x-prefixed, padded
+      function formatFeatureHex(value) {
+        const digits = value > 0xffff ? 5 : 4;
+        return `0x${value.toString(16).padStart(digits, "0")}`;
+      }
+
+      // Update live binary and hex displays
+      function updateLiveDisplays() {
+        const combinedValue = Array.from(selectedFlags).reduce(
+          (sum, flag) => sum | flag,
+          0
+        );
+
+        // For binary display, keep a minimum width for readability; but hex is canonical
+        const minBitsForBinary = 16;
+        const bitsForBinary =
+          combinedValue === 0
+            ? minBitsForBinary
+            : Math.max(
+                minBitsForBinary,
+                Math.ceil(Math.log2(combinedValue + 1))
+              );
+        const paddedBitsForBinary = Math.ceil(bitsForBinary / 4) * 4;
+
+        const hexString = formatCanonicalHex(combinedValue);
+        const binaryString = combinedValue
+          .toString(2)
+          .padStart(paddedBitsForBinary, "0");
+
+        // Group binary string in 4-bit chunks
+        const groupedBinary = binaryString.match(/.{1,4}/g).join(" ");
+
+        liveBinaryOutput.textContent = groupedBinary;
+        liveHexOutput.textContent = hexString;
+      }
+
+      // Hex Input Functionality
+      function isValidHex(input) {
+        const cleaned = input.replace(/\s/g, "").toLowerCase();
+        const hex = cleaned.startsWith("0x") ? cleaned.slice(2) : cleaned;
+        return /^[0-9a-f]+$/.test(hex) && hex.length > 0;
+      }
+
+      function cleanHexInput(input) {
+        const cleaned = input.replace(/\s/g, "").toLowerCase();
+        return cleaned.startsWith("0x") ? cleaned.slice(2) : cleaned;
+      }
+
+      function hexToBinary(hex) {
+        return hex
+          .split("")
+          .map((char) => {
+            const decimal = parseInt(char, 16);
+            return decimal.toString(2).padStart(4, "0");
+          })
+          .join("");
+      }
+
+      function groupHex(hex) {
+        return hex.match(/.{1}/g).join(" ");
+      }
+
+      function createNibbleBinaryDisplay(hex) {
+        const nibbles = hex.split("");
+        return nibbles
+          .map((char, index) => {
+            const decimal = parseInt(char, 16);
+            const binary = decimal.toString(2).padStart(4, "0");
+            return `<div style="margin: 5px 0; padding: 8px; background-color: rgba(52, 152, 219, 0.1); border-radius: 4px;">
+                    <strong>Hex: ${char}</strong> → Binary: <span style="font-weight: bold; color: #2980b9;">${binary}</span> (Decimal: ${decimal})
+                </div>`;
+          })
+          .join("");
+      }
+
+      function createFeatureFlagsTable(hexValue) {
+        const rows = [];
+        const matchedFlags = [];
+
+        featureFlags.forEach((flag) => {
+          if ((hexValue & flag.hex) === flag.hex) {
+            matchedFlags.push(flag);
+          }
+        });
+
+        if (matchedFlags.length === 0) {
+          return '<tr><td colspan="3" style="padding: 15px; text-align: center; color: #7f8c8d; font-style: italic;">No feature flags detected</td></tr>';
+        }
+
+        matchedFlags.forEach((flag) => {
+          const deprecatedClass = flag.deprecated ? "opacity: 0.6;" : "";
+          const deprecatedText = flag.deprecated ? " (Deprecated)" : "";
+          rows.push(`
+                    <tr style="${deprecatedClass}">
+                        <td style="padding: 8px; border: 1px solid #ddd; font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-weight: bold; color: #2980b9;">${formatFeatureHex(
+                          flag.hex
+                        )}</td>
+                        <td style="padding: 8px; border: 1px solid #ddd; font-weight: 600; color: #2c3e50;">${
+                          flag.name
+                        }${deprecatedText}</td>
+                        <td style="padding: 8px; border: 1px solid #ddd; font-size: 0.9rem; color: #5a6c7d; line-height: 1.4;">${
+                          flag.description
+                        }</td>
+                    </tr>
+                `);
+        });
+
+        return rows.join("");
+      }
+
+      function createBitPositionsTable(binaryString) {
+        const rows = [];
+        for (let i = 0; i < binaryString.length; i++) {
+          const position = binaryString.length - 1 - i;
+          const bit = binaryString[i];
+          const powerOf2 = `2^${position}`;
+          const value = bit === "1" ? Math.pow(2, position) : 0;
+          const backgroundColor = bit === "1" ? "#d5f4e6" : "#fdf2f2";
+
+          rows.push(`
+                    <tr style="background-color: ${backgroundColor};">
+                        <td style="padding: 6px; border: 1px solid #ddd; text-align: center; font-weight: bold;">${position}</td>
+                        <td style="padding: 6px; border: 1px solid #ddd; text-align: center;">${powerOf2}</td>
+                        <td style="padding: 6px; border: 1px solid #ddd; text-align: center;">${value.toLocaleString()}</td>
+                        <td style="padding: 6px; border: 1px solid #ddd; text-align: center; font-weight: bold; color: ${
+                          bit === "1" ? "#27ae60" : "#e74c3c"
+                        };">${bit}</td>
+                    </tr>
+                `);
+        }
+        return rows.join("");
+      }
+
+      function hideAllResults() {
+        groupedHexResult.style.display = "none";
+        nibbleBinaryResult.style.display = "none";
+        fullBinaryResult.style.display = "none";
+        bitTableResult.style.display = "none";
+        hexError.classList.remove("show");
+      }
+
+      function showAllResults() {
+        groupedHexResult.style.display = "block";
+        nibbleBinaryResult.style.display = "block";
+        fullBinaryResult.style.display = "block";
+        bitTableResult.style.display = "block";
+      }
+
+      function convertHexToBinary() {
+        const input = hexInput.value.trim();
+
+        if (!input.trim()) {
+          hideAllResults();
+          updateFeatureFlagsFromHex(0);
+          updateBinaryBuilderFromHex("");
+          return;
+        }
+
+        if (!isValidHex(input)) {
+          hideAllResults();
+          hexError.textContent =
+            "Invalid characters detected. Only 0-9 and a-f are allowed.";
+          hexError.classList.add("show");
+          updateBinaryBuilderFromHex("");
+          return;
+        }
+
+        const cleanHex = cleanHexInput(input);
+        const hexValue = parseInt(cleanHex, 16);
+        const binaryString = hexToBinary(cleanHex);
+
+        // Update displays
+        groupedHexOutput.textContent = groupHex(cleanHex);
+        nibbleBinaryOutput.innerHTML = createNibbleBinaryDisplay(cleanHex);
+        fullBinaryOutput.textContent = binaryString;
+
+        // Replace the bit positions table with feature flags table
+        bitPositionsBody.innerHTML = createFeatureFlagsTable(hexValue);
+
+        // Update the table header
+        const bitTableHeader = document.querySelector(
+          "#bit-positions-table thead tr"
+        );
+        bitTableHeader.innerHTML = `
+                <th style="padding: 8px; border: 1px solid #ddd; text-align: center;">Hex Value</th>
+                <th style="padding: 8px; border: 1px solid #ddd; text-align: center;">Feature Name</th>
+                <th style="padding: 8px; border: 1px solid #ddd; text-align: center;">Description</th>
+            `;
+
+        // Update the result title
+        document.querySelector("#bit-table-result strong").textContent =
+          "Detected Feature Flags:";
+
+        showAllResults();
+        hexError.classList.remove("show");
+
+        // Update feature flags checkboxes to match the hex input
+        updateFeatureFlagsFromHex(hexValue);
+      }
+
+      function updateFeatureFlagsFromHex(hexValue) {
+        selectedFlags.clear();
+
+        featureFlags.forEach((flag, index) => {
+          const checkbox = document.getElementById(`flag-${index}`);
+          const flagItem = checkbox.closest(".feature-flag-item");
+
+          if ((hexValue & flag.hex) === flag.hex) {
+            checkbox.checked = true;
+            selectedFlags.add(flag.hex);
+            flagItem.classList.add("active");
+          } else {
+            checkbox.checked = false;
+            flagItem.classList.remove("active");
+          }
+        });
+
+        updateLiveDisplays();
+      }
+
+      // Enhanced hex input validation and processing with comprehensive edge case handling
+      function validateAndProcessHexInput(input) {
+        // Clear any existing error state and input styling
+        hexError.classList.remove("show");
+        hexInput.classList.remove("input-error");
+
+        // Disable binary builder by default and re-enable only for valid input
+        const binaryBuilder = document.getElementById(
+          "binary-builder-container"
+        );
+        if (binaryBuilder) {
+          binaryBuilder.classList.remove("binary-builder-disabled");
+        }
+
+        if (!input.trim()) {
+          hideAllResults();
+          updateFeatureFlagsFromHex(0);
+          updateBinaryBuilderFromHex("");
+          return { isValid: true, cleanHex: "", isEmpty: true };
+        }
+
+        // Remove whitespace and convert to uppercase
+        let cleaned = input.replace(/\s/g, "").toLowerCase();
+
+        // Remove 0x prefix if present
+        if (cleaned.startsWith("0x")) {
+          cleaned = cleaned.slice(2);
+        }
+
+        // Edge case: Check for very long strings (more than 16 hex characters = 64 bits)
+        if (cleaned.length > 16) {
+          hexError.textContent =
+            "Hex input is too long. Maximum 16 characters (64 bits) supported.";
+          hexError.classList.add("show");
+          hexInput.classList.add("input-error");
+          if (binaryBuilder)
+            binaryBuilder.classList.add("binary-builder-disabled");
+          hideAllResults();
+          return {
+            isValid: false,
+            cleanHex: cleaned,
+            isEmpty: false,
+            isTooLong: true,
+          };
+        }
+
+        // Check for invalid characters
+        if (!/^[0-9a-f]*$/.test(cleaned)) {
+          hexError.textContent =
+            "Invalid characters detected. Only 0-9 and a-f are allowed.";
+          hexError.classList.add("show");
+          hexInput.classList.add("input-error");
+          if (binaryBuilder)
+            binaryBuilder.classList.add("binary-builder-disabled");
+          hideAllResults();
+          return {
+            isValid: false,
+            cleanHex: cleaned,
+            isEmpty: false,
+            hasInvalidChars: true,
+          };
+        }
+
+        // Edge case: Handle leading zeros (they're valid but we should mention them)
+        const hasLeadingZeros =
+          cleaned.length > 1 && cleaned.startsWith("0") && cleaned[1] !== "0";
+
+        // Odd-length canonical hex is valid per requirements. Accept without warnings.
+        if (cleaned.length % 2 !== 0 && cleaned.length > 0) {
+          return {
+            isValid: true,
+            cleanHex: cleaned,
+            isEmpty: false,
+            isOddLength: true,
+          };
+        }
+
+        // Edge case: Check for leading zeros specifically
+        if (hasLeadingZeros) {
+          // This is valid but we might want to inform the user
+          return {
+            isValid: true,
+            cleanHex: cleaned,
+            isEmpty: false,
+            hasLeadingZeros: true,
+          };
+        }
+
+        return { isValid: true, cleanHex: cleaned, isEmpty: false };
+      }
+
+      function updateBinaryBuilderFromHex(hexString) {
+        // Find or create binary builder container
+        let binaryBuilder = document.getElementById("binary-builder-container");
+
+        if (!binaryBuilder) {
+          // Create binary builder if it doesn't exist
+          const hexSection = document.getElementById("hex-section");
+          const binaryBuilderDiv = document.createElement("div");
+          binaryBuilderDiv.innerHTML = `
+                    <div class="input-group">
+                        <label>Binary Builder (Visual Bit Toggle):</label>
+                        <div class="binary-builder-container" id="binary-builder-container">
+                            <!-- Bit toggle buttons will be generated dynamically -->
+                        </div>
+                        <div class="result-display" style="margin-top: 10px; display: block;">
+                            <strong>Binary String:</strong><br>
+                            <span id="binary-builder-output" style="font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 1.1rem; letter-spacing: 1px;">0000000000000000</span>
+                        </div>
+                    </div>
+                `;
+          hexSection.appendChild(binaryBuilderDiv);
+          binaryBuilder = document.getElementById("binary-builder-container");
+        }
+
+        // Generate bit toggles based on hex string length (minimum 16 bits, expand as needed)
+        const bitsNeeded = Math.max(16, hexString.length * 4);
+        binaryBuilder.innerHTML = "";
+
+        // Convert hex to binary for initial state
+        let binaryString = "";
+        if (hexString) {
+          try {
+            const hexToBinResult = hexToBin("0x" + hexString);
+            binaryString = hexToBinResult.fullBin.padStart(bitsNeeded, "0");
+          } catch (e) {
+            binaryString = "0".repeat(bitsNeeded);
+          }
+        } else {
+          binaryString = "0".repeat(bitsNeeded);
+        }
+
+        // Create bit toggle elements (MSB on left, LSB on right)
+        for (let i = 0; i < bitsNeeded; i++) {
+          const bitPosition = bitsNeeded - 1 - i; // MSB first
+          const bitValue = binaryString[i] || "0";
+          const powerValue = Math.pow(2, bitPosition);
+
+          const bitToggle = document.createElement("div");
+          bitToggle.className = `bit-toggle ${
+            bitValue === "1" ? "active" : ""
+          }`;
+          bitToggle.dataset.position = bitPosition;
+          bitToggle.innerHTML = `
+                    <div class="bit-position">Bit ${bitPosition}</div>
+                    <div class="bit-value">${bitValue}</div>
+                    <div class="bit-power">${powerValue.toLocaleString()}</div>
+                `;
+
+          // Make bit toggle focusable and add keyboard support
+          bitToggle.setAttribute("tabindex", "0");
+          bitToggle.setAttribute("role", "button");
+          bitToggle.setAttribute(
+            "aria-pressed",
+            bitValue === "1" ? "true" : "false"
+          );
+          bitToggle.setAttribute(
+            "aria-label",
+            `Toggle bit ${bitPosition} (current value: ${bitValue}, power: ${powerValue.toLocaleString()})`
+          );
+
+          // Add click handler for bit toggle
+          function toggleBit() {
+            const currentValue =
+              bitToggle.querySelector(".bit-value").textContent;
+            const newValue = currentValue === "1" ? "0" : "1";
+
+            bitToggle.querySelector(".bit-value").textContent = newValue;
+            bitToggle.classList.toggle("active", newValue === "1");
+            bitToggle.setAttribute(
+              "aria-pressed",
+              newValue === "1" ? "true" : "false"
+            );
+            bitToggle.setAttribute(
+              "aria-label",
+              `Toggle bit ${bitPosition} (current value: ${newValue}, power: ${powerValue.toLocaleString()})`
+            );
+
+            updateBinaryFromToggles();
+          }
+
+          bitToggle.addEventListener("click", toggleBit);
+
+          // Add keyboard support (Space and Enter)
+          bitToggle.addEventListener("keydown", function (e) {
+            if (e.key === " " || e.key === "Enter") {
+              e.preventDefault();
+              toggleBit();
+            }
+          });
+
+          binaryBuilder.appendChild(bitToggle);
+        }
+
+        // Update binary builder output
+        const binaryBuilderOutput = document.getElementById(
+          "binary-builder-output"
+        );
+        if (binaryBuilderOutput) {
+          const groupedBinary = binaryString.match(/.{1,4}/g).join(" ");
+          binaryBuilderOutput.textContent = groupedBinary;
+        }
+      }
+
+      function updateHexFromBinaryBuilder() {
+        const bitToggles = document.querySelectorAll(".bit-toggle");
+        let binaryString = "";
+
+        // Build binary string from bit toggles (they are in reverse order)
+        const togglesArray = Array.from(bitToggles);
+        togglesArray.forEach((toggle) => {
+          const bitValue = toggle.querySelector(".bit-value").textContent;
+          binaryString += bitValue;
+        });
+
+        // Update binary builder output display
+        const binaryBuilderOutput = document.getElementById(
+          "binary-builder-output"
+        );
+        if (binaryBuilderOutput) {
+          const groupedBinary = binaryString.match(/.{1,4}/g).join(" ");
+          binaryBuilderOutput.textContent = groupedBinary;
+        }
+
+        // Convert binary to hex and update hex input
+        try {
+          const hexValue = binToHex(binaryString);
+          const cleanHex = hexValue; // already canonical lowercase, no 0x
+          hexInput.value = cleanHex;
+
+          // Trigger hex processing to update other displays
+          processValidHexInput(cleanHex);
+        } catch (e) {
+          console.warn("Error converting binary to hex:", e);
+        }
+      }
+
+      function processValidHexInput(cleanHex) {
+        if (!cleanHex) {
+          hideAllResults();
+          updateFeatureFlagsFromHex(0);
+          return;
+        }
+
+        try {
+          const hexToBinResult = hexToBin("0x" + cleanHex);
+          const hexValue = parseInt(cleanHex, 16);
+
+          // Update grouped hex display
+          groupedHexOutput.textContent = groupHex(cleanHex);
+
+          // Update nibble binary display
+          nibbleBinaryOutput.innerHTML = createNibbleBinaryDisplay(cleanHex);
+
+          // Update full binary display
+          fullBinaryOutput.textContent = hexToBinResult.fullBin;
+
+          // Update feature flags table
+          bitPositionsBody.innerHTML = createFeatureFlagsTable(hexValue);
+
+          // Ensure correct table headers
+          const bitTableHeader = document.querySelector(
+            "#bit-positions-table thead tr"
+          );
+          bitTableHeader.innerHTML = `
+                    <th style="padding: 8px; border: 1px solid #ddd; text-align: center;">Hex Value</th>
+                    <th style="padding: 8px; border: 1px solid #ddd; text-align: center;">Feature Name</th>
+                    <th style="padding: 8px; border: 1px solid #ddd; text-align: center;">Description</th>
+                `;
+
+          document.querySelector("#bit-table-result strong").textContent =
+            "Detected Feature Flags:";
+
+          showAllResults();
+
+          // Update feature flags checkboxes
+          updateFeatureFlagsFromHex(hexValue);
+        } catch (e) {
+          console.warn("Error processing hex input:", e);
+          hexError.textContent = "Error processing hex input: " + e.message;
+          hexError.classList.add("show");
+          hideAllResults();
+        }
+      }
+
+      // Event listeners with enhanced validation
+      convertButton.addEventListener("click", function () {
+        const validation = validateAndProcessHexInput(hexInput.value);
+        if (validation.isValid && !validation.isEmpty) {
+          processValidHexInput(validation.cleanHex);
+          updateBinaryBuilderFromHex(validation.cleanHex);
+        }
+      });
+
+      // Enhanced input event with real-time validation and uppercase conversion
+      hexInput.addEventListener("input", function (e) {
+        // Convert input to uppercase and validate
+        const validation = validateAndProcessHexInput(this.value);
+
+        // Update the input field with cleaned, uppercase value
+        if (
+          validation.cleanHex !==
+          this.value.replace(/\s/g, "").replace(/^0x/i, "").toLowerCase()
+        ) {
+          const cursorPos = this.selectionStart;
+          const oldLength = this.value.length;
+
+          // Preserve 0x prefix if it was there
+          const hadPrefix = this.value.toLowerCase().startsWith("0x");
+          this.value = hadPrefix
+            ? "0x" + validation.cleanHex
+            : validation.cleanHex;
+
+          const newLength = this.value.length;
+          const newCursorPos = cursorPos + (newLength - oldLength);
+          this.setSelectionRange(newCursorPos, newCursorPos);
+        }
+
+        // Debounced processing for valid input
+        clearTimeout(this.conversionTimeout);
+        if (validation.isValid && !validation.isEmpty) {
+          this.conversionTimeout = setTimeout(() => {
+            processValidHexInput(validation.cleanHex);
+            updateBinaryBuilderFromHex(validation.cleanHex);
+          }, 300);
+        } else if (validation.isEmpty) {
+          hideAllResults();
+          updateFeatureFlagsFromHex(0);
+          updateBinaryBuilderFromHex("");
+        }
+      });
+
+      // Enhanced change event for when user finishes editing
+      hexInput.addEventListener("change", function (e) {
+        const validation = validateAndProcessHexInput(this.value);
+        if (validation.isValid && !validation.isEmpty) {
+          processValidHexInput(validation.cleanHex);
+          updateBinaryBuilderFromHex(validation.cleanHex);
+        }
+      });
+
+      hexInput.addEventListener("keypress", function (event) {
+        if (event.key === "Enter") {
+          const validation = validateAndProcessHexInput(this.value);
+          if (validation.isValid && !validation.isEmpty) {
+            processValidHexInput(validation.cleanHex);
+            updateBinaryBuilderFromHex(validation.cleanHex);
+          }
+        }
+      });
+
+      clearButton.addEventListener("click", function () {
+        hexInput.value = "";
+        hexInput.classList.remove("input-error");
+        hexError.classList.remove("show");
+        hideAllResults();
+        updateFeatureFlagsFromHex(0);
+        updateBinaryBuilderFromHex("");
+        const binaryBuilder = document.getElementById(
+          "binary-builder-container"
+        );
+        if (binaryBuilder) {
+          binaryBuilder.classList.remove("binary-builder-disabled");
+        }
+        hexInput.focus();
+      });
+
+      // Feature flags event listeners
+      clearFeaturesButton.addEventListener("click", function () {
+        selectedFlags.clear();
+        featureFlags.forEach((flag, index) => {
+          const checkbox = document.getElementById(`flag-${index}`);
+          const flagItem = checkbox.closest(".feature-flag-item");
+          checkbox.checked = false;
+          flagItem.classList.remove("active");
+        });
+        updateLiveDisplays();
+      });
+
+      copyHexButton.addEventListener("click", async function () {
+        const hexValue = liveHexOutput.textContent;
+        try {
+          await navigator.clipboard.writeText(hexValue);
+          const originalText = this.textContent;
+          this.textContent = "Copied!";
+          setTimeout(() => {
+            this.textContent = originalText;
+          }, 1500);
+        } catch (err) {
+          console.error("Failed to copy: ", err);
+          // Fallback for older browsers
+          const textArea = document.createElement("textarea");
+          textArea.value = hexValue;
+          document.body.appendChild(textArea);
+          textArea.select();
+          document.execCommand("copy");
+          document.body.removeChild(textArea);
+
+          const originalText = this.textContent;
+          this.textContent = "Copied!";
+          setTimeout(() => {
+            this.textContent = originalText;
+          }, 1500);
+        }
+      });
+
+      // Initialize the application
+      document.addEventListener("DOMContentLoaded", function () {
+        // Theme toggle wiring
+        const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+        mediaQuery.addEventListener("change", (e) => {
+          try {
+            const stored = localStorage.getItem("featureFlagsTheme");
+            if (!stored) {
+              applyTheme(e.matches ? "dark" : "light");
+            }
+          } catch (_) {}
+        });
+        if (themeToggleButton) {
+          themeToggleButton.addEventListener("click", () => {
+            const current = document.documentElement.getAttribute("data-theme") || "light";
+            const next = current === "dark" ? "light" : "dark";
+            try {
+              localStorage.setItem("featureFlagsTheme", next);
+            } catch (_) {}
+            applyTheme(next);
+          });
+        }
+
+        initializeFeatureFlags();
+        updateLiveDisplays();
+
+        // ===== Simple Test Suite (runs automatically) =====
+        (function runTests() {
+          const results = [];
+          function assertEqual(name, actual, expected) {
+            const pass = Object.is(actual, expected);
+            results.push({ name, pass, actual, expected });
+            if (!pass) {
+              console.error(
+                `[FAIL] ${name}: expected`,
+                expected,
+                "but got",
+                actual
+              );
+            } else {
+              console.log(`[PASS] ${name}`);
+            }
+          }
+
+          // hex cleaning/validation
+          assertEqual(
+            'isValidHexInput("0x5B3")',
+            isValidHexInput("0x5B3"),
+            true
+          );
+          assertEqual(
+            "cleanHexInput lowercases and strips 0x",
+            cleanHexInput("0x5B3 "),
+            "5b3"
+          );
+          assertEqual(
+            "isValidHexInput rejects invalid chars",
+            isValidHexInput("xyz"),
+            false
+          );
+
+          // bin <-> hex
+          assertEqual("binToHex 0000 -> 0", binToHex("0000"), "0");
+          assertEqual(
+            "binToHex 0101 1011 0011 -> 5b3",
+            binToHex("010110110011"),
+            "5b3"
+          );
+          const h2b = hexToBin("0x5b3");
+          assertEqual(
+            "hexToBin fullBin length for 3 nibbles",
+            h2b.fullBin.length,
+            12
+          );
+          assertEqual(
+            "hexToBin grouped 5b3 MS nibble",
+            parseInt(h2b.groupedNibbles[0].hex, 16),
+            5
+          );
+
+          // canonical formatting
+          assertEqual(
+            'formatCanonicalHex(0) -> "0"',
+            formatCanonicalHex(0),
+            "0"
+          );
+          assertEqual(
+            'formatCanonicalHex(0x1) -> "1"',
+            formatCanonicalHex(0x1),
+            "1"
+          );
+          assertEqual(
+            'formatCanonicalHex(0x1000) -> "1000"',
+            formatCanonicalHex(0x1000),
+            "1000"
+          );
+          assertEqual(
+            "formatFeatureHex(0x0001) -> 0x0001",
+            formatFeatureHex(0x0001),
+            "0x0001"
+          );
+          assertEqual(
+            "formatFeatureHex(0x10000) -> 0x10000",
+            formatFeatureHex(0x10000),
+            "0x10000"
+          );
+          assertEqual(
+            "formatFeatureHex(0x20000) -> 0x20000",
+            formatFeatureHex(0x20000),
+            "0x20000"
+          );
+
+          // feature flags detection table contains known flag
+          const tableHtml = createFeatureFlagsTable(0x0400);
+          const containsTestFlag = tableHtml.includes("Test Flag");
+          assertEqual(
+            "createFeatureFlagsTable includes Test Flag",
+            containsTestFlag,
+            true
+          );
+
+          // log summary
+          const passed = results.filter((r) => r.pass).length;
+          const failed = results.length - passed;
+          console.log(
+            `Feature Flags Tool Tests: ${passed}/${results.length} passed, ${failed} failed.`
+          );
+        })();
+      });
+    </script>
+  </body>
+</html>

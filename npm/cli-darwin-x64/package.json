@@ -1,0 +1,19 @@
+{
+  "name": "@dayone/cli-darwin-x64",
+  "version": "0.1.0",
+  "description": "Platform binary for @dayone/cli (macOS x64, no embeddings)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Automattic/DayOne-Cli"
+  },
+  "os": ["darwin"],
+  "cpu": ["x64"],
+  "bin": {
+    "dayone": "dayone"
+  },
+  "files": ["dayone"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "GPL-2.0-or-later"
+}

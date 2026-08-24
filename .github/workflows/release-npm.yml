@@ -1,0 +1,159 @@
+name: Release npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to pull binaries from (e.g. v0.1.0)"
+        required: true
+      dry_run:
+        description: "Dry run (don't actually publish)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Derive version from tag
+        id: version
+        run: |
+          TAG="${{ inputs.tag }}"
+          VERSION="${TAG#v}"
+          NPM_TAG="latest"
+          [[ "$VERSION" == *-* ]] && NPM_TAG="next"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: $VERSION (dist-tag: $NPM_TAG)"
+
+      - name: Download binaries from GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p release
+          gh release download "${{ inputs.tag }}" --dir release --repo "$GITHUB_REPOSITORY"
+          echo "Downloaded binaries:"
+          ls -la release/
+
+      - name: Prepare platform packages
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          declare -A BINARY_MAP=(
+            # Publish binaries for all supported platforms: macOS, Linux, and Windows.
+            ["dayone-darwin-arm64"]="npm/cli-darwin-arm64/dayone"
+            ["dayone-darwin-x64"]="npm/cli-darwin-x64/dayone"
+            ["dayone-linux-arm64"]="npm/cli-linux-arm64/dayone"
+            ["dayone-linux-arm64-no-embeddings"]="npm/cli-linux-arm64-no-embeddings/dayone"
+            ["dayone-linux-x64"]="npm/cli-linux-x64/dayone"
+            ["dayone-linux-x64-no-embeddings"]="npm/cli-linux-x64-no-embeddings/dayone"
+            ["dayone-win32-x64.exe"]="npm/cli-win32-x64/dayone.exe"
+          )
+
+          missing=0
+          for release_name in "${!BINARY_MAP[@]}"; do
+            dest="${BINARY_MAP[$release_name]}"
+            pkg_dir=$(dirname "$dest")
+
+            if [ -f "release/$release_name" ]; then
+              cp "release/$release_name" "$dest"
+              chmod +x "$dest" 2>/dev/null || true
+              jq --arg v "$VERSION" '.version = $v' "$pkg_dir/package.json" > tmp.json && mv tmp.json "$pkg_dir/package.json"
+              echo "$pkg_dir:"
+              ls -la "$pkg_dir/"
+            else
+              echo "::error::Required release binary is missing: $release_name"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Prepare main package
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          cd npm/dayone-cli
+          jq --arg v "$VERSION" '
+            .version = $v |
+            .optionalDependencies |= with_entries(.value = $v)
+          ' package.json > tmp.json && mv tmp.json package.json
+          echo "package.json:"
+          cat package.json
+
+      - name: Include license in packages
+        run: |
+          for pkg_dir in npm/cli-* npm/dayone-cli; do
+            cp LICENSE "$pkg_dir/LICENSE"
+          done
+
+      - name: Pack dry-run candidates
+        if: ${{ inputs.dry_run }}
+        run: |
+          mkdir -p npm-candidates
+          for pkg_dir in npm/cli-*; do
+            if ls "$pkg_dir"/dayone* 1>/dev/null 2>&1; then
+              npm pack "./$pkg_dir" --pack-destination npm-candidates
+            fi
+          done
+          npm pack ./npm/dayone-cli --pack-destination npm-candidates
+
+      - name: Upload dry-run candidates
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-candidates-${{ steps.version.outputs.version }}
+          path: npm-candidates/*.tgz
+          if-no-files-found: error
+
+      - name: Publish platform packages
+        if: ${{ !inputs.dry_run }}
+        run: |
+          for pkg_dir in npm/cli-*; do
+            if ls "$pkg_dir"/dayone* 1>/dev/null 2>&1; then
+              echo "::group::Publishing $(basename $pkg_dir)"
+              cd "$pkg_dir"
+              npm publish --access public --provenance --tag "${{ steps.version.outputs.npm_tag }}"
+              cd "$GITHUB_WORKSPACE"
+              echo "::endgroup::"
+            else
+              echo "::warning::Skipping $(basename $pkg_dir) — no binary"
+            fi
+          done
+
+      - name: Publish main package
+        if: ${{ !inputs.dry_run }}
+        run: |
+          cd npm/dayone-cli
+          npm publish --access public --provenance --tag "${{ steps.version.outputs.npm_tag }}"
+
+      - name: Dry run summary
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "## Dry run — would publish:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "npm dist-tag: \`${{ steps.version.outputs.npm_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          for pkg_dir in npm/cli-* npm/dayone-cli; do
+            name=$(jq -r '.name' "$pkg_dir/package.json")
+            version=$(jq -r '.version' "$pkg_dir/package.json")
+            has_binary="no"
+            ls "$pkg_dir"/dayone* 1>/dev/null 2>&1 && has_binary="yes"
+            echo "- \`$name@$version\` (binary: $has_binary)" >> $GITHUB_STEP_SUMMARY
+          done

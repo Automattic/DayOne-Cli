@@ -1,0 +1,30 @@
+{
+  "name": "@dayone/cli",
+  "version": "0.1.0",
+  "description": "Day One CLI",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Automattic/DayOne-Cli"
+  },
+  "bin": {
+    "dayone": "run.js"
+  },
+  "files": ["run.js"],
+  "type": "module",
+  "dependencies": {
+    "update-notifier": "7.3.1"
+  },
+  "optionalDependencies": {
+    "@dayone/cli-darwin-arm64": "0.1.0",
+    "@dayone/cli-darwin-x64": "0.1.0",
+    "@dayone/cli-linux-arm64": "0.1.0",
+    "@dayone/cli-linux-arm64-no-embeddings": "0.1.0",
+    "@dayone/cli-linux-x64": "0.1.0",
+    "@dayone/cli-linux-x64-no-embeddings": "0.1.0",
+    "@dayone/cli-win32-x64": "0.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "GPL-2.0-or-later"
+}

@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Encoding Converter</title>
+    <style>
+      :root {
+        --bg1: #0b0f14;
+        --bg2: #071018;
+        --glass: rgba(255, 255, 255, 0.04);
+        --glass-2: rgba(255, 255, 255, 0.02);
+        --accent: rgba(99, 102, 241, 0.18);
+        --muted: rgba(255, 255, 255, 0.65);
+        --danger: #ff6b6b;
+        --radius: 14px;
+        --glass-border: rgba(255, 255, 255, 0.06);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+          Roboto, "Helvetica Neue", Arial;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: radial-gradient(
+            1000px 600px at 10% 10%,
+            rgba(99, 102, 241, 0.12),
+            transparent 12%
+          ),
+          radial-gradient(
+            800px 500px at 90% 90%,
+            rgba(14, 165, 233, 0.06),
+            transparent 14%
+          ),
+          linear-gradient(180deg, var(--bg1), var(--bg2));
+        color: #e6eef8;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        padding: 32px;
+        box-sizing: border-box;
+      }
+
+      .app {
+        max-width: 1100px;
+        margin: 0 auto;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 20px;
+      }
+
+      .title {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+      .logo {
+        width: 54px;
+        height: 54px;
+        border-radius: 12px;
+        background: linear-gradient(
+          135deg,
+          rgba(255, 255, 255, 0.04),
+          rgba(255, 255, 255, 0.02)
+        );
+        box-shadow: 0 6px 30px rgba(2, 6, 23, 0.6),
+          inset 0 1px 0 rgba(255, 255, 255, 0.02);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--glass-border);
+        backdrop-filter: blur(8px) saturate(130%);
+      }
+      .logo svg {
+        filter: drop-shadow(0 6px 18px rgba(99, 102, 241, 0.14));
+      }
+
+      h1 {
+        font-size: 1.05rem;
+        margin: 0;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+      }
+      p.lead {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .counts {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        background: linear-gradient(
+          180deg,
+          rgba(255, 255, 255, 0.02),
+          transparent
+        );
+        padding: 10px 14px;
+        border-radius: 12px;
+        border: 1px solid var(--glass-border);
+        backdrop-filter: blur(6px) saturate(140%);
+        font-size: 0.95rem;
+      }
+      .counts .item {
+        display: flex;
+        flex-direction: column;
+        text-align: right;
+        min-width: 92px;
+      }
+      .counts .label {
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+      .counts .value {
+        font-weight: 700;
+        font-size: 1.05rem;
+        color: #eaf0ff;
+      }
+
+      main {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: 1fr;
+      }
+
+      /* layout switches to horizontal on bigger screens */
+      @media (min-width: 880px) {
+        main {
+          grid-template-columns: repeat(3, 1fr);
+        }
+      }
+
+      .panel {
+        border-radius: var(--radius);
+        padding: 14px;
+        background: linear-gradient(
+          180deg,
+          rgba(255, 255, 255, 0.025),
+          rgba(255, 255, 255, 0.01)
+        );
+        border: 1px solid var(--glass-border);
+        box-shadow: 0 6px 34px rgba(2, 6, 23, 0.6);
+        backdrop-filter: blur(12px) saturate(140%);
+        display: flex;
+        flex-direction: column;
+        min-height: 180px;
+      }
+
+      .panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+      .panel-title {
+        font-size: 0.95rem;
+        font-weight: 600;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .panel-sub {
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+
+      textarea {
+        resize: vertical;
+        min-height: 120px;
+        max-height: 40vh;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: #eaf0ff;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono",
+          monospace;
+        font-size: 0.92rem;
+        line-height: 1.45;
+        padding: 8px;
+      }
+      .controls {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .btn {
+        background: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        padding: 6px 10px;
+        border-radius: 10px;
+        color: var(--muted);
+        font-weight: 600;
+        font-size: 0.85rem;
+        cursor: pointer;
+        display: inline-flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .btn.ghost {
+        border-style: dashed;
+      }
+      .btn:active {
+        transform: translateY(1px);
+      }
+
+      .error {
+        color: var(--danger);
+        font-size: 0.82rem;
+        margin-top: 8px;
+      }
+
+      .panel .footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        margin-top: 8px;
+        flex-wrap: wrap;
+      }
+      .hint {
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+
+      .accent-pill {
+        background: linear-gradient(
+          90deg,
+          rgba(99, 102, 241, 0.14),
+          rgba(14, 165, 233, 0.06)
+        );
+        padding: 6px 10px;
+        border-radius: 999px;
+        color: #eaf0ff;
+        font-weight: 700;
+        font-size: 0.78rem;
+        border: 1px solid rgba(255, 255, 255, 0.03);
+      }
+
+      footer {
+        margin-top: 22px;
+        color: var(--muted);
+        font-size: 0.82rem;
+        text-align: center;
+      }
+
+      /* small touch targets on mobile */
+      @media (max-width: 520px) {
+        .logo {
+          width: 48px;
+          height: 48px;
+        }
+        .counts {
+          font-size: 0.9rem;
+          padding: 8px;
+        }
+        textarea {
+          font-size: 0.96rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header>
+        <div class="title" aria-hidden="false">
+          <div class="logo" title="Encoder">
+            <!-- subtle icon -->
+            <svg
+              width="30"
+              height="30"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden="true"
+            >
+              <path
+                d="M3 12h18"
+                stroke="#93a0ff"
+                stroke-width="1.6"
+                stroke-linecap="round"
+              />
+              <path
+                d="M8 7l-5 5 5 5"
+                stroke="#5eead4"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M16 7l5 5-5 5"
+                stroke="#ffd86b"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </div>
+          <div>
+            <h1>Encoding Converter</h1>
+            <p class="lead">
+              Type UTF‑8, hex, or base64 — the other formats update in real
+              time.
+            </p>
+          </div>
+        </div>
+
+        <div class="counts" aria-live="polite">
+          <div class="item">
+            <div class="label">Bytes</div>
+            <div id="byteCount" class="value">0</div>
+          </div>
+          <div class="item">
+            <div class="label">Bits</div>
+            <div id="bitCount" class="value">0</div>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section class="panel" aria-labelledby="utf8-label">
+          <div class="panel-header">
+            <div>
+              <div id="utf8-label" class="panel-title">UTF‑8</div>
+              <div class="panel-sub">Human text (Unicode)</div>
+            </div>
+            <div class="controls">
+              <button class="btn" id="copyUtf8" title="Copy UTF-8">Copy</button>
+              <button class="btn ghost" id="clearUtf8" title="Clear">
+                Clear
+              </button>
+            </div>
+          </div>
+          <textarea
+            id="utf8"
+            placeholder="Type or paste UTF-8 text..."
+            spellcheck="false"
+            inputmode="text"
+          ></textarea>
+          <div class="footer">
+            <div class="hint">
+              UTF‑8 will be encoded to bytes; non-printable bytes are allowed.
+            </div>
+            <div id="errUtf8" class="error" hidden></div>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="hex-label">
+          <div class="panel-header">
+            <div>
+              <div id="hex-label" class="panel-title">Hex</div>
+              <div class="panel-sub">
+                Hexadecimal (0–9, A–F). Spaces allowed.
+              </div>
+            </div>
+            <div class="controls">
+              <button class="btn" id="copyHex">Copy</button>
+              <button class="btn ghost" id="clearHex">Clear</button>
+            </div>
+          </div>
+          <textarea
+            id="hex"
+            placeholder="e.g. 48656c6c6f or 48 65 6c 6c 6f"
+            spellcheck="false"
+            inputmode="text"
+          ></textarea>
+          <div class="footer">
+            <div class="hint">
+              Odd-length hex is invalid. 0x prefix is ignored.
+            </div>
+            <div id="errHex" class="error" hidden></div>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="b64-label">
+          <div class="panel-header">
+            <div>
+              <div id="b64-label" class="panel-title">Base64</div>
+              <div class="panel-sub">Standard or URL-safe base64.</div>
+            </div>
+            <div class="controls">
+              <button class="btn" id="copyB64">Copy</button>
+              <button class="btn ghost" id="clearB64">Clear</button>
+            </div>
+          </div>
+          <textarea
+            id="b64"
+            placeholder="Type or paste base64..."
+            spellcheck="false"
+            inputmode="text"
+          ></textarea>
+          <div class="footer">
+            <div class="hint">
+              URL-safe (-_) is accepted. Padding (=) is optional.
+            </div>
+            <div id="errB64" class="error" hidden></div>
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <span class="accent-pill">Courtesy of Day One Gadgets</span>
+      </footer>
+    </div>
+
+    <script>
+      (function () {
+        // Elements
+        const utf8El = document.getElementById("utf8");
+        const hexEl = document.getElementById("hex");
+        const b64El = document.getElementById("b64");
+
+        const errUtf8 = document.getElementById("errUtf8");
+        const errHex = document.getElementById("errHex");
+        const errB64 = document.getElementById("errB64");
+
+        const copyUtf8 = document.getElementById("copyUtf8");
+        const copyHex = document.getElementById("copyHex");
+        const copyB64 = document.getElementById("copyB64");
+
+        const clearUtf8 = document.getElementById("clearUtf8");
+        const clearHex = document.getElementById("clearHex");
+        const clearB64 = document.getElementById("clearB64");
+
+        const byteCount = document.getElementById("byteCount");
+        const bitCount = document.getElementById("bitCount");
+
+        // Guard flag to avoid feedback loops when programmatically setting values
+        let activeSource = null; // 'utf8' | 'hex' | 'b64' | null
+
+        function setError(el, msg) {
+          if (!msg) {
+            el.hidden = true;
+            el.textContent = "";
+          } else {
+            el.hidden = false;
+            el.textContent = msg;
+          }
+        }
+
+        function updateCounts(bytes) {
+          const len = bytes ? bytes.length : 0;
+          byteCount.textContent = String(len);
+          bitCount.textContent = String(len * 8);
+        }
+
+        // Conversion helpers
+        function bytesFromUtf8(str) {
+          try {
+            return new TextEncoder().encode(str);
+          } catch (e) {
+            return null;
+          }
+        }
+
+        function utf8FromBytes(bytes) {
+          try {
+            return new TextDecoder().decode(bytes);
+          } catch (e) {
+            // fallback: map char codes
+            return Array.from(bytes)
+              .map((b) => String.fromCharCode(b))
+              .join("");
+          }
+        }
+
+        function sanitizeHexInput(s) {
+          // remove 0x, spaces, newlines and other non-hex
+          return s.replace(/\b0x/g, "").replace(/[^0-9a-fA-F]/g, "");
+        }
+
+        function bytesFromHex(s) {
+          const clean = sanitizeHexInput(s);
+          if (clean.length === 0) return new Uint8Array();
+          if (clean.length % 2 !== 0)
+            throw new Error("Hex string has odd length");
+          const len = clean.length / 2;
+          const out = new Uint8Array(len);
+          for (let i = 0; i < len; i++) {
+            out[i] = parseInt(clean.substr(i * 2, 2), 16);
+            if (Number.isNaN(out[i])) throw new Error("Invalid hex byte");
+          }
+          return out;
+        }
+
+        function hexFromBytes(bytes) {
+          return Array.from(bytes)
+            .map((b) => b.toString(16).padStart(2, "0"))
+            .join("");
+        }
+
+        function normalizeBase64(s) {
+          // accept URL-safe and missing padding
+          let t = s.replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
+          // add padding
+          const pad = t.length % 4;
+          if (pad === 1) throw new Error("Invalid base64 string length");
+          if (pad === 2) t += "==";
+          if (pad === 3) t += "=";
+          return t;
+        }
+
+        function bytesFromBase64(s) {
+          if (!s) return new Uint8Array();
+          const norm = normalizeBase64(s);
+          try {
+            // atob -> binary string
+            const bin = atob(norm);
+            const len = bin.length;
+            const arr = new Uint8Array(len);
+            for (let i = 0; i < len; i++) arr[i] = bin.charCodeAt(i);
+            return arr;
+          } catch (e) {
+            throw new Error("Invalid base64 data");
+          }
+        }
+
+        function base64FromBytes(bytes) {
+          if (!bytes || bytes.length === 0) return "";
+          // convert bytes to binary string in chunks
+          const CHUNK = 0x8000;
+          let i = 0;
+          let result = "";
+          while (i < bytes.length) {
+            const end = Math.min(i + CHUNK, bytes.length);
+            result += String.fromCharCode.apply(null, bytes.subarray(i, end));
+            i = end;
+          }
+          return btoa(result);
+        }
+
+        // Main update logic: when source is changed, parse it to bytes and update other fields
+        function handleInput(source) {
+          if (activeSource && activeSource !== source) {
+            // allow only one source at a time
+          }
+          activeSource = source;
+
+          // Clear previous errors
+          setError(errUtf8, "");
+          setError(errHex, "");
+          setError(errB64, "");
+
+          let bytes = null;
+          try {
+            if (source === "utf8") {
+              const str = utf8El.value;
+              bytes = bytesFromUtf8(str);
+              if (bytes === null) throw new Error("Unable to encode UTF‑8");
+            } else if (source === "hex") {
+              bytes = bytesFromHex(hexEl.value);
+            } else if (source === "b64") {
+              bytes = bytesFromBase64(b64El.value);
+            } else {
+              bytes = new Uint8Array();
+            }
+          } catch (e) {
+            // Silently ignore conversion failure; leave other fields and counts unchanged
+            activeSource = null;
+            return;
+          }
+
+          // update counts
+          updateCounts(bytes);
+
+          // set other fields programmatically (avoid retrigger parsing)
+          if (source !== "utf8") {
+            const s = utf8FromBytes(bytes);
+            programmaticSet("utf8", s);
+          }
+          if (source !== "hex") {
+            programmaticSet("hex", hexFromBytes(bytes));
+          }
+          if (source !== "b64") {
+            programmaticSet("b64", base64FromBytes(bytes));
+          }
+
+          activeSource = null;
+        }
+
+        function programmaticSet(field, value) {
+          // Set the field without triggering its input handler by temporarily removing listener
+          const elMap = { utf8: utf8El, hex: hexEl, b64: b64El };
+          const el = elMap[field];
+          if (!el) return;
+          // set selection-safe
+          const start = el.selectionStart;
+          const end = el.selectionEnd;
+          el.value = value;
+          try {
+            el.setSelectionRange(start, end);
+          } catch (e) {
+            /* ignore */
+          }
+        }
+
+        // Debounce helpers
+        let tUtf8, tHex, tB64;
+        const DEBOUNCE = 150;
+
+        utf8El.addEventListener("input", () => {
+          clearTimeout(tUtf8);
+          tUtf8 = setTimeout(() => {
+            if (activeSource && activeSource !== "utf8") return;
+            handleInput("utf8");
+          }, DEBOUNCE);
+        });
+
+        hexEl.addEventListener("input", () => {
+          clearTimeout(tHex);
+          tHex = setTimeout(() => {
+            if (activeSource && activeSource !== "hex") return;
+            handleInput("hex");
+          }, DEBOUNCE);
+        });
+
+        b64El.addEventListener("input", () => {
+          clearTimeout(tB64);
+          tB64 = setTimeout(() => {
+            if (activeSource && activeSource !== "b64") return;
+            handleInput("b64");
+          }, DEBOUNCE);
+        });
+
+        // Copy functions
+        async function copyText(text, btn) {
+          try {
+            await navigator.clipboard.writeText(text);
+            btn.textContent = "Copied";
+            setTimeout(() => (btn.textContent = "Copy"), 1200);
+          } catch (e) {
+            // fallback
+            try {
+              const ta = document.createElement("textarea");
+              ta.value = text;
+              document.body.appendChild(ta);
+              ta.select();
+              document.execCommand("copy");
+              document.body.removeChild(ta);
+              btn.textContent = "Copied";
+              setTimeout(() => (btn.textContent = "Copy"), 1200);
+            } catch (e2) {
+              btn.textContent = "Failed";
+              setTimeout(() => (btn.textContent = "Copy"), 1200);
+            }
+          }
+        }
+
+        copyUtf8.addEventListener("click", () =>
+          copyText(utf8El.value, copyUtf8)
+        );
+        copyHex.addEventListener("click", () => copyText(hexEl.value, copyHex));
+        copyB64.addEventListener("click", () => copyText(b64El.value, copyB64));
+
+        // Clear buttons
+        clearUtf8.addEventListener("click", () => {
+          utf8El.value = "";
+          handleInput("utf8");
+        });
+        clearHex.addEventListener("click", () => {
+          hexEl.value = "";
+          handleInput("hex");
+        });
+        clearB64.addEventListener("click", () => {
+          b64El.value = "";
+          handleInput("b64");
+        });
+
+        // initialize: empty content
+        handleInput(null);
+
+        // allow drop of files (optional): if user drops a file onto any panel, read bytes and populate
+        function handleFileBytes(bytes) {
+          // default: set hex view
+          programmaticSet("hex", hexFromBytes(bytes));
+          programmaticSet("utf8", utf8FromBytes(bytes));
+          programmaticSet("b64", base64FromBytes(bytes));
+          updateCounts(bytes);
+        }
+
+        ["dragover", "dragenter"].forEach((ev) => {
+          document.addEventListener(ev, (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+          });
+        });
+
+        document.addEventListener("drop", (e) => {
+          e.preventDefault();
+          const f = e.dataTransfer.files && e.dataTransfer.files[0];
+          if (!f) return;
+          const reader = new FileReader();
+          reader.onload = function () {
+            const result = new Uint8Array(this.result);
+            handleFileBytes(result);
+          };
+          reader.readAsArrayBuffer(f);
+        });
+
+        // keyboard shortcut: Ctrl/Cmd+K clears all
+        document.addEventListener("keydown", (e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+            e.preventDefault();
+            utf8El.value = "";
+            hexEl.value = "";
+            b64El.value = "";
+            handleInput(null);
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>
