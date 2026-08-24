@@ -8,19 +8,6 @@ Releases are tag-driven so GitHub Actions and Buildkite build the same commit. G
 
 Pull requests and `main` build both macOS release variants on GitHub-hosted runners without signing or release credentials. These jobs use ad-hoc signatures to validate the binary architecture, signing identifier, hardened-runtime option, and archive contents. Real Developer ID signing and notarization run only for protected semantic release tags.
 
-Before connecting Buildkite:
-
-1. Protect `v*` tags with an active GitHub ruleset that restricts creation, updates, and deletion to approved release actors.
-2. Enable Buildkite tag builds. Disable branch, pull-request, and fork builds.
-3. Set this provider build condition under **Pipeline Settings**:
-
-   ```text
-   build.source_event == "push" &&
-   build.tag =~ /^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/
-   ```
-
-The pipeline repeats this condition before the Automattic CI toolkit credentials plugin loads. Its YAML uses `$$` for the regular expression end anchor because Buildkite interpolation consumes a single `$`. UI, API, scheduled, and trigger-job builds do not have a `push` source event and therefore cannot load the signing plugin.
-
 ## Step 1: Build Binaries
 
 1. Confirm the release commit is on `main` and CI is green.
