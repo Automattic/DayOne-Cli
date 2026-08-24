@@ -4,6 +4,23 @@
 
 Releases are tag-driven so GitHub Actions and Buildkite build the same commit. GitHub Actions produces Linux and Windows binaries; Buildkite produces signed and notarized macOS binaries. Both upload stripped binaries to one GitHub Release and send matching debug information and source bundles to Sentry. Publishing the release to npm remains a separate manual step.
 
+## Buildkite Trust Boundary
+
+Pull requests and `main` build both macOS release variants on GitHub-hosted runners without signing or release credentials. These jobs use ad-hoc signatures to validate the binary architecture, signing identifier, hardened-runtime option, and archive contents. Real Developer ID signing and notarization run only for protected semantic release tags.
+
+Before connecting Buildkite:
+
+1. Protect `v*` tags with an active GitHub ruleset that restricts creation, updates, and deletion to approved release actors.
+2. Enable Buildkite tag builds. Disable branch, pull-request, and fork builds.
+3. Set this provider build condition under **Pipeline Settings**:
+
+   ```text
+   build.source_event == "push" &&
+   build.tag =~ /^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/
+   ```
+
+The pipeline repeats this condition before the Automattic CI toolkit credentials plugin loads. Its YAML uses `$$` for the regular expression end anchor because Buildkite interpolation consumes a single `$`. UI, API, scheduled, and trigger-job builds do not have a `push` source event and therefore cannot load the signing plugin.
+
 ## Step 1: Build Binaries
 
 1. Confirm the release commit is on `main` and CI is green.
@@ -67,7 +84,7 @@ Treat the workflow files as authoritative if this document and CI differ.
 
 1. Push a prerelease tag from the intended release commit (for example, `v0.22.0-rc.1`). Tags containing `-` create a GitHub prerelease.
 2. Wait for GitHub Actions and both Buildkite jobs to pass.
-3. Confirm the prerelease contains all seven expected assets and that every binary reports the tag version. Run `dayone doctor` for each build and confirm `environment.build_sha` matches the tagged commit rather than `unknown`.
+3. Confirm the prerelease contains all seven platform binaries plus `LICENSE` and `LICENSE-NOTICE`, and that every binary reports the tag version. Run `dayone doctor` for each build and confirm `environment.build_sha` matches the tagged commit rather than `unknown`.
 4. On both macOS architectures, verify the signature and notarization requirement:
 
    ```bash
@@ -94,7 +111,7 @@ Before publishing publicly:
 
 - Install each supported npm candidate and run the launcher version check.
 - Confirm each npm platform binary is byte-for-byte identical to its GitHub Release asset.
-- Confirm every npm package contains the GPL license text.
+- Confirm every npm package contains `LICENSE` and `LICENSE-NOTICE`.
 - Upgrade an existing npm install and confirm profiles, authentication, and Keychain access still work.
 - Run login, sync, entry create/update/delete, plaintext and end-to-end encrypted entries, and representative media against the release candidate.
 - Interrupt and retry a sync; confirm queued changes remain visible with `dayone outbox list`.
@@ -114,7 +131,7 @@ npm view @dayone/cli dist-tags --json
 
 ## Failure Recovery
 
-- Retry failed GitHub Actions or Buildkite jobs against the same tag; Sentry debug uploads are idempotent and release uploads replace only their own named assets.
+- Retry failed jobs within the original GitHub Actions or Buildkite webhook build. Do not create or rebuild a release through the Buildkite UI or API. Sentry debug uploads are idempotent, and release uploads replace only their own named assets.
 - If Sentry rejects an upload, verify the token, organization/project slugs, and generated dSYM, ELF debug file, or PDB before retrying.
 - Do not move a published tag to a different commit. Fix the problem and create a new prerelease or patch tag.
 - Do not run npm publishing until every release asset, macOS signature, notarization requirement, and npm candidate has been verified.
