@@ -11,7 +11,7 @@
   "bin": {
     "dayone": "dayone.exe"
   },
-  "files": ["dayone.exe"],
+  "files": ["dayone.exe", "LICENSE", "LICENSE-NOTICE"],
   "publishConfig": {
     "access": "public"
   },

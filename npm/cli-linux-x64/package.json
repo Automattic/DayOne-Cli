@@ -11,7 +11,7 @@
   "bin": {
     "dayone": "dayone"
   },
-  "files": ["dayone"],
+  "files": ["dayone", "LICENSE", "LICENSE-NOTICE"],
   "publishConfig": {
     "access": "public"
   },
