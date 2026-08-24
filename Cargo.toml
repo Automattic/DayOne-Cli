@@ -44,7 +44,7 @@ dotenvy = "0.15"
 comrak = { version = "0.51", default-features = false }
 toml = "1.1.1"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_28"] }
-crossterm = "0.28"
+crossterm = "0.29"
 termimad = "0.35"
 ansi-to-tui = "8"
 lru = "0.18.2"
