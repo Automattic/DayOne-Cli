@@ -370,14 +370,33 @@ dayone outbox list
 dayone outbox list --payload
 ```
 
-`--payload` can contain journal text and private identifiers. Inspect it locally and share it only through a private support channel. Clearing an item prevents that queued change from reaching the server:
+`--payload` can contain journal text and private identifiers. Inspect it locally and share it only through a private support channel.
+
+When `shared-journals-v2` is enabled, uploads to shared journals with “Anyone can edit” permissions check the server's read-only edit-lock endpoint. Another user or another device holding an active lease causes an `entry_edit_locked` failure. The queued contents remain available, and sync does not automatically retry that item. A lease held by this CLI's user and device permits upload. Personal journals, author-only shared journals, entry deletions, and media uploads do not make this check.
+
+The entry API handles both creation and updates. A newly created entry has no server lock: the documented missing-target response permits its upload. Other HTTP failures, unavailable endpoints, and malformed responses prevent upload and use the normal retry policy. The server must support `GET /api/shares/{journalId}/entries/{entryId}/lock` before this check can succeed.
+
+This is advisory protection, not conflict-free editing. A lease can change after the check, and a completed edit can still conflict with an older queued version after the lease ends.
+
+After reviewing the retained payload and the current shared entry, explicitly requeue one failed item:
+
+```bash
+dayone outbox retry --id <outbox-id>
+dayone sync
+```
+
+`retry` works locally and does not upload immediately. It preserves the original payload and edit timestamps, resets the attempt count, and leaves the previous error visible until the upload settles. The next upload checks the lease again. A snapshot without a saved edit timestamp fails rather than receiving a new timestamp. A newer local edit can replace queued work, so inspect retained contents before editing the same entry again.
+
+To keep the text separately, use `entry write` without `--entry-id` to create a new entry. This is not an automatic copy of attachments or other metadata. Do not clear the failed item until you have recovered the content you need.
+
+Clearing an item prevents that queued change from reaching the server:
 
 ```bash
 dayone outbox clear --id <outbox-id>
 dayone outbox clear --failed
 ```
 
-Local entry data is not deleted by `outbox clear`, but the cleared operation will not sync unless another local edit queues it again.
+Local entry data is not deleted or restored from the server by `outbox clear`, but the cleared operation will not sync unless another local edit queues it again. A later successful sync does not imply that all previously failed items were resolved; inspect `outbox list` for retained failures.
 
 ### Collecting diagnostics
 

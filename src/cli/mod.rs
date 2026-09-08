@@ -717,6 +717,8 @@ struct SyncCliArgs {
 enum OutboxSubcommand {
     /// List all queued sync-outbox items with status and last error.
     List(OutboxListCliArgs),
+    /// Requeue one failed item unchanged. Review its payload and current entry before retrying.
+    Retry(OutboxRetryCliArgs),
     /// Remove stuck items from the local sync outbox. Cleared items will not
     /// be pushed to the server; local data is not modified.
     Clear(OutboxClearCliArgs),
@@ -733,6 +735,12 @@ struct OutboxListCliArgs {
     /// Include each item's queued payload as parsed JSON.
     #[arg(long, default_value_t = false)]
     payload: bool,
+}
+
+#[derive(Debug, Args)]
+struct OutboxRetryCliArgs {
+    #[arg(long)]
+    id: String,
 }
 
 #[derive(Debug, Args)]
@@ -1562,6 +1570,9 @@ fn dispatch_outbox(base_url: &str, cmd: OutboxCommand, store: &Store) -> Result<
             let output = outbox::list(store, base_url, args.payload)?;
             print_json(&output)?;
         }
+        OutboxSubcommand::Retry(args) => {
+            print_json(&outbox::retry(store, base_url, &args.id)?)?;
+        }
         OutboxSubcommand::Clear(args) => {
             let output = outbox::clear(
                 store,
@@ -1727,6 +1738,7 @@ fn subcommand_label(command: &TopLevelCommand) -> Option<&'static str> {
         TopLevelCommand::Outbox(cmd) => Some(match cmd.command {
             OutboxSubcommand::List(_) => "list",
             OutboxSubcommand::Clear(_) => "clear",
+            OutboxSubcommand::Retry(_) => "retry",
         }),
         TopLevelCommand::SyncSchedule(cmd) => Some(match cmd.command {
             SyncScheduleSubcommand::Status => "status",
@@ -2503,5 +2515,11 @@ mod tests {
             err.to_string().contains("permission denied"),
             "non-broken-pipe errors should be preserved"
         );
+    }
+    #[test]
+    fn outbox_retry_requires_one_explicit_id() {
+        assert!(Cli::try_parse_from(["dayone", "outbox", "retry", "--id", "entry:j:e"]).is_ok());
+        assert!(Cli::try_parse_from(["dayone", "outbox", "retry"]).is_err());
+        assert!(Cli::try_parse_from(["dayone", "outbox", "retry", "--all"]).is_err());
     }
 }

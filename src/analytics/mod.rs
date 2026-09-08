@@ -221,6 +221,7 @@ fn is_known_subcommand(value: &str) -> bool {
             | "daily-chat-messages"
             | "context-items"
             | "clear"
+            | "retry"
             | "status"
             | "enable"
             | "set-interval"

@@ -37,6 +37,21 @@ impl SyncApiClient {
 }
 
 impl DayOneApiClient for SyncApiClient {
+    async fn get_entry_edit_lock(&self, journal_id: &str, entry_id: &str) -> Result<Value> {
+        let path = crate::http::entry_edit_lock_path(journal_id, entry_id);
+        let trace = HttpTrace::api("GET", &path, Some(0));
+        let response = self
+            .client
+            .get(format!("{}/api{}", self.base_url, path))
+            .headers(bearer_web_headers(&self.token, &self.device_info)?)
+            .header(reqwest::header::CACHE_CONTROL, "no-cache")
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+            .context("failed to read entry edit-lock status")?;
+        parse_value_or_error(response, trace).await
+    }
+
     async fn get_json(&self, api_path: &str, query: &[(&str, String)]) -> Result<Value> {
         let url = format!("{}/api{}", self.base_url, api_path);
         let trace = HttpTrace::api("GET", api_path, Some(0));
@@ -379,12 +394,90 @@ fn parse_json_or_ndjson(body: &str) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_json_or_ndjson;
+    use super::{DeviceInfo, SyncApiClient, parse_json_or_ndjson};
 
     #[test]
     fn ndjson_rejects_a_malformed_line_instead_of_dropping_it() {
         let error = parse_json_or_ndjson("\n{\"id\":1}\nnot-json\n{\"id\":2}\n")
             .expect_err("a malformed line must fail the response");
         assert!(error.to_string().contains("line 3"));
+    }
+    #[tokio::test]
+    async fn entry_lock_http_contract_handles_absent_targets_and_http_errors() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        for (status, body, permitted) in [
+            (
+                200,
+                r#"{"lease":null,"server_time":"2026-09-01T00:00:00Z"}"#,
+                true,
+            ),
+            (404, r#"{"error":"not_found"}"#, true),
+            (404, "endpoint not deployed", false),
+            (401, r#"{"error":"Unauthorized"}"#, false),
+            (403, r#"{"error":"forbidden"}"#, false),
+            (429, r#"{"error":"rate_limited"}"#, false),
+            (503, "upstream-private-response-marker", false),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                write!(socket, "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                String::from_utf8(request).unwrap()
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let store = crate::store::sqlite::Store::open_at(&dir.path().join("test.db")).unwrap();
+            let profile = store.get_or_create_profile_for_base_url(&url).unwrap();
+            store
+                .save_auth_session(
+                    profile.id,
+                    "synthetic-token",
+                    "2026-09-01T00:00:00Z",
+                    r#"{"user_id":77}"#,
+                )
+                .unwrap();
+            store
+                .upsert_singleton_json_row(
+                    "feature_flags",
+                    1,
+                    r#"{"shared-journals-v2":true}"#,
+                    None,
+                )
+                .unwrap();
+            let device = DeviceInfo::resolve(Some("77"));
+            let expected_id = device.id.clone();
+            let api = SyncApiClient::new(&url, "synthetic-token", device).unwrap();
+            let result = crate::sync::entry_lock::check_upload(
+                &store,
+                &api,
+                profile.id,
+                "j /",
+                "e /",
+                &serde_json::json!({"is_shared":true,"shared_permissions":"any_participant_full"}),
+            )
+            .await;
+            assert_eq!(result.is_ok(), permitted, "status {status}");
+            let request = server.join().unwrap();
+            assert!(request.starts_with("GET /api/shares/j%20%2F/entries/e%20%2F/lock HTTP/1.1"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("cache-control: no-cache")
+            );
+            assert!(request.contains(&format!("Id=\"{expected_id}\"")));
+            if let Err(error) = result {
+                assert!(!error.to_string().contains(body));
+            }
+        }
     }
 }

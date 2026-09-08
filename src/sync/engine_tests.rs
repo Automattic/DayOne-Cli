@@ -2345,3 +2345,351 @@ async fn process_outbox_item_comment_create_failure_keeps_existing_cursor() {
         "failed create reconcile should not clear existing cursor"
     );
 }
+
+async fn lock_check_fixture(
+    journal: serde_json::Value,
+    flags: serde_json::Value,
+) -> (
+    tempfile::TempDir,
+    crate::store::sqlite::Store,
+    i64,
+    crate::http::fake::FakeApiClient,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::store::sqlite::Store::open_at(&dir.path().join("test.db")).unwrap();
+    let profile = store
+        .get_or_create_profile_for_base_url("https://stg.dayone.me")
+        .unwrap();
+    store
+        .save_auth_session(
+            profile.id,
+            "synthetic-token",
+            "2026-09-01T00:00:00Z",
+            r#"{"id":"owner"}"#,
+        )
+        .unwrap();
+    store
+        .upsert_singleton_json_row("feature_flags", 1, &flags.to_string(), None)
+        .unwrap();
+    store
+        .upsert_json_row("journals", "j", None, None, &journal.to_string())
+        .unwrap();
+    let entry = json!({"id":"e", "body":"retained text", "date":1712757600000_i64, "moments":[], "tags":[]});
+    store
+        .upsert_entry_json_row_with_edit_date(
+            "e",
+            "j",
+            Some("1712757600000"),
+            None,
+            None,
+            &entry.to_string(),
+        )
+        .unwrap();
+    let payload = json!({"journal_id":"j","entry_id":"e","entry_json":entry,"queued_at_epoch_ms":1712757600000_i64}).to_string();
+    store
+        .enqueue_outbox_item("entry:j:e", "entry", "update", "j:e", &payload, 0)
+        .unwrap();
+    let api = crate::http::fake::FakeApiClient::new()
+        .with_bytes_fixture(
+            "PUT_ENTRY_MULTIPART /v3/sync/entries/j/e",
+            serde_json::to_vec(
+                &json!({"outcome":"clean","revision":{"entryId":"e","type":"update"}}),
+            )
+            .unwrap(),
+        )
+        .await;
+    (dir, store, profile.id, api)
+}
+
+fn relaxed_lock_journal() -> serde_json::Value {
+    json!({"id":"j","is_shared":true,"shared_permissions":"any_participant_full"})
+}
+fn lock_response(user: &str, device: &str) -> serde_json::Value {
+    json!({"lease":{"holder_user_id":user,"holder_device_id":device,"expires_at":"2026-09-01T00:02:00Z"},"server_time":"2026-09-01T00:00:00Z"})
+}
+
+async fn assert_foreign_lease_blocks(user: &str, device: &str) {
+    let (_dir, store, profile, api) =
+        lock_check_fixture(relaxed_lock_journal(), json!({"shared-journals-v2":true})).await;
+    let original = store.list_outbox_item_details(true).unwrap()[0]
+        .payload_json
+        .clone();
+    let api = api
+        .with_json_fixture(
+            "GET_JSON /shares/j/entries/e/lock",
+            lock_response(user, device),
+        )
+        .await;
+    let err = drain_sync_outbox(&store, &api, 1, profile, &mut vec![], "outbox:post")
+        .await
+        .expect_err("another client must block the upload");
+    assert!(err.to_string().contains("entry_edit_locked"));
+    assert!(api.last_put_entry_content_json().await.is_none());
+    let item = &store.list_outbox_item_details(true).unwrap()[0];
+    assert_eq!(item.status, "failed");
+    assert_eq!(item.payload_json, original);
+    drain_sync_outbox(&store, &api, 2, profile, &mut vec![], "outbox:post")
+        .await
+        .unwrap();
+    assert_eq!(
+        store.list_outbox_item_details(false).unwrap()[0].status,
+        "failed"
+    );
+}
+
+#[tokio::test]
+async fn entry_lock_other_user_blocks_upload_without_retry() {
+    assert_foreign_lease_blocks("other", "other-device").await;
+}
+#[tokio::test]
+async fn entry_lock_same_user_other_device_blocks_upload_without_retry() {
+    assert_foreign_lease_blocks("owner", "other-device").await;
+}
+
+#[tokio::test]
+async fn entry_lock_own_lease_allows_upload() {
+    let (_dir, store, profile, api) =
+        lock_check_fixture(relaxed_lock_journal(), json!({"shared-journals-v2":true})).await;
+    let device = crate::http::DeviceInfo::resolve(Some("owner"));
+    let api = api
+        .with_json_fixture(
+            "GET_JSON /shares/j/entries/e/lock",
+            lock_response("owner", &device.id),
+        )
+        .await;
+    drain_sync_outbox(&store, &api, 1, profile, &mut vec![], "outbox:post")
+        .await
+        .unwrap();
+    assert_eq!(
+        api.last_put_entry_content_json().await.unwrap()["body"],
+        "retained text"
+    );
+}
+
+#[tokio::test]
+async fn entry_lock_absent_lease_allows_upload() {
+    let (_dir, store, profile, api) =
+        lock_check_fixture(relaxed_lock_journal(), json!({"shared-journals-v2":true})).await;
+    let api = api
+        .with_json_fixture(
+            "GET_JSON /shares/j/entries/e/lock",
+            json!({"lease":null,"server_time":"2026-09-01T00:00:00Z"}),
+        )
+        .await;
+    drain_sync_outbox(&store, &api, 1, profile, &mut vec![], "outbox:post")
+        .await
+        .unwrap();
+    assert!(store.list_outbox_item_details(false).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn entry_lock_unavailable_status_is_retryable_and_does_not_upload() {
+    let (_dir, store, profile, api) =
+        lock_check_fixture(relaxed_lock_journal(), json!({"shared-journals-v2":true})).await;
+    drain_sync_outbox(&store, &api, 1, profile, &mut vec![], "outbox:post")
+        .await
+        .expect_err("missing status response cannot permit upload");
+    assert!(api.last_put_entry_content_json().await.is_none());
+    let item = &store.list_outbox_item_details(false).unwrap()[0];
+    assert_eq!(item.status, "pending");
+    assert_eq!(item.attempt_count, 1);
+}
+
+#[tokio::test]
+async fn entry_lock_malformed_status_is_retryable() {
+    for response in [
+        json!({}),
+        json!({"lease":{}}),
+        json!({"lease":null}),
+        json!({"lease":null,"server_time":"bad date"}),
+    ] {
+        let (_dir, store, profile, api) =
+            lock_check_fixture(relaxed_lock_journal(), json!({"shared-journals-v2":true})).await;
+        let api = api
+            .with_json_fixture("GET_JSON /shares/j/entries/e/lock", response)
+            .await;
+        drain_sync_outbox(&store, &api, 1, profile, &mut vec![], "outbox:post")
+            .await
+            .expect_err("malformed response must not be read as unlocked");
+        assert!(api.last_put_entry_content_json().await.is_none());
+        assert_eq!(
+            store.list_outbox_item_details(false).unwrap()[0].status,
+            "pending"
+        );
+    }
+}
+
+#[tokio::test]
+async fn entry_lock_gate_skips_personal_strict_and_disabled_journals() {
+    for (journal, flags) in [
+        (
+            json!({"id":"j","is_shared":false}),
+            json!({"shared-journals-v2":true}),
+        ),
+        (
+            json!({"id":"j","is_shared":true,"shared_permissions":"creator_full+owner_delete"}),
+            json!({"shared-journals-v2":true}),
+        ),
+        (relaxed_lock_journal(), json!({})),
+        (relaxed_lock_journal(), json!({"shared-journals-v2":false})),
+    ] {
+        let (_dir, store, profile, api) = lock_check_fixture(journal, flags).await;
+        drain_sync_outbox(&store, &api, 1, profile, &mut vec![], "outbox:post")
+            .await
+            .unwrap();
+        assert!(api.last_put_entry_content_json().await.is_some());
+    }
+}
+
+#[tokio::test]
+async fn entry_lock_failed_payload_survives_entry_and_journal_removal() {
+    for remove_journal in [true, false] {
+        let (_dir, store, profile, api) =
+            lock_check_fixture(relaxed_lock_journal(), json!({"shared-journals-v2":true})).await;
+        let original = store.list_outbox_item_details(true).unwrap()[0]
+            .payload_json
+            .clone();
+        let api = api
+            .with_json_fixture(
+                "GET_JSON /shares/j/entries/e/lock",
+                lock_response("other", "other-device"),
+            )
+            .await;
+        assert!(
+            drain_sync_outbox(&store, &api, 1, profile, &mut vec![], "outbox:post")
+                .await
+                .is_err()
+        );
+        if remove_journal {
+            store.delete_local_journal("j").unwrap();
+        } else {
+            store.delete_local_entry("j", "e").unwrap();
+        }
+        let items = store.list_outbox_item_details(true).unwrap();
+        assert_eq!(
+            items.len(),
+            1,
+            "deleting a local row must not remove retained failed work"
+        );
+        assert_eq!(items[0].payload_json, original);
+        assert_eq!(items[0].status, "failed");
+    }
+}
+
+#[tokio::test]
+async fn entry_lock_upload_uses_snapshot_timestamp_after_local_row_changes() {
+    let (_dir, store, profile, api) =
+        lock_check_fixture(relaxed_lock_journal(), json!({"shared-journals-v2":true})).await;
+    store
+        .upsert_entry_json_row_with_edit_date(
+            "e",
+            "j",
+            Some("2026-09-07T00:00:00Z"),
+            None,
+            None,
+            r#"{"id":"e","body":"different newer local row"}"#,
+        )
+        .unwrap();
+    let api = api
+        .with_json_fixture(
+            "GET_JSON /shares/j/entries/e/lock",
+            json!({"lease":null,"server_time":"2026-09-01T00:00:00Z"}),
+        )
+        .await;
+    drain_sync_outbox(&store, &api, 1, profile, &mut vec![], "outbox:post")
+        .await
+        .unwrap();
+    assert_eq!(
+        api.last_put_entry_envelope().await.unwrap()["editDate"],
+        1712757600000_f64
+    );
+    assert_eq!(
+        api.last_put_entry_content_json().await.unwrap()["body"],
+        "retained text"
+    );
+}
+
+#[tokio::test]
+async fn entry_snapshot_without_saved_edit_time_does_not_get_a_fresh_timestamp() {
+    let (_dir, store, profile, api) =
+        lock_check_fixture(relaxed_lock_journal(), json!({"shared-journals-v2":true})).await;
+    let item = store.list_outbox_item_details(true).unwrap().remove(0);
+    let mut payload: Value = serde_json::from_str(item.payload_json.as_deref().unwrap()).unwrap();
+    payload
+        .as_object_mut()
+        .unwrap()
+        .remove("queued_at_epoch_ms");
+    store
+        .enqueue_outbox_item(&item.id, "entry", "update", "j:e", &payload.to_string(), 0)
+        .unwrap();
+    let api = api
+        .with_json_fixture(
+            "GET_JSON /shares/j/entries/e/lock",
+            json!({"lease":null,"server_time":"2026-09-01T00:00:00Z"}),
+        )
+        .await;
+    drain_sync_outbox(&store, &api, 1, profile, &mut vec![], "outbox:post")
+        .await
+        .expect_err("a retained snapshot must not get the current time on retry");
+    assert!(api.last_put_entry_content_json().await.is_none());
+    assert_eq!(
+        store.list_outbox_item_details(false).unwrap()[0].status,
+        "failed"
+    );
+}
+
+#[tokio::test]
+async fn entry_lock_check_does_not_change_entry_deletion() {
+    let (_dir, store, profile, api) =
+        lock_check_fixture(relaxed_lock_journal(), json!({"shared-journals-v2":true})).await;
+    let item = store.list_outbox_item_details(true).unwrap().remove(0);
+    store
+        .enqueue_outbox_item(
+            &item.id,
+            "entry",
+            "delete",
+            "j:e",
+            item.payload_json.as_deref().unwrap(),
+            0,
+        )
+        .unwrap();
+    drain_sync_outbox(&store, &api, 1, profile, &mut vec![], "outbox:post")
+        .await
+        .unwrap();
+    assert_eq!(
+        api.last_put_entry_envelope().await.unwrap()["type"],
+        "delete"
+    );
+}
+
+#[tokio::test]
+async fn entry_lock_ownership_uses_canonical_session_identity() {
+    for (user, expected_id) in [
+        (json!({"user_id":"owner"}), "owner"),
+        (json!({"userId":"owner"}), "owner"),
+        (json!({"id":77}), "77"),
+        (json!({"id":" owner "}), "owner"),
+    ] {
+        let (_dir, store, profile, api) =
+            lock_check_fixture(relaxed_lock_journal(), json!({"shared-journals-v2":true})).await;
+        store
+            .connect()
+            .unwrap()
+            .execute(
+                "UPDATE auth_sessions SET user_json = ?1 WHERE profile_id = ?2",
+                rusqlite::params![user.to_string(), profile],
+            )
+            .unwrap();
+        let device = crate::http::DeviceInfo::resolve(Some(expected_id));
+        let api = api
+            .with_json_fixture(
+                "GET_JSON /shares/j/entries/e/lock",
+                lock_response(expected_id, &device.id),
+            )
+            .await;
+        drain_sync_outbox(&store, &api, 1, profile, &mut vec![], "outbox:post")
+            .await
+            .unwrap();
+        assert!(api.last_put_entry_content_json().await.is_some());
+    }
+}

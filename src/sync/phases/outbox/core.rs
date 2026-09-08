@@ -359,6 +359,7 @@ pub(crate) async fn push_entry_outbox<C: DayOneApiClient>(
     let entry_id = payload.entry_id.as_str();
 
     let persisted_user_edit_date = store.get_entry_user_edit_date(entry_id)?;
+    let has_snapshot = payload.entry_json.is_some();
     let mut entry_content_value = if let Some(snapshot) = payload.entry_json.take() {
         snapshot
     } else {
@@ -388,11 +389,17 @@ pub(crate) async fn push_entry_outbox<C: DayOneApiClient>(
                 .and_then(|value| entry_date_value_to_f64(Some(value)))
         })
         .unwrap_or(now_epoch_ms() as f64);
-    let edit_date_epoch_ms = resolve_outbox_edit_date_epoch_ms(
-        &payload,
-        &entry_content,
-        persisted_user_edit_date.as_deref(),
-    );
+    let edit_date_epoch_ms = if has_snapshot {
+        queued_entry_edit_date_epoch_ms(&payload, &entry_content).ok_or_else(|| OutboxProcessError::NonRetryable {
+            reason: "queued entry snapshot has no saved edit timestamp; inspect dayone outbox list --payload before recovery".to_owned(),
+        })?
+    } else {
+        resolve_outbox_edit_date_epoch_ms(
+            &payload,
+            &entry_content,
+            persisted_user_edit_date.as_deref(),
+        )
+    };
     let envelope = if is_delete {
         json!({
             "entryId": entry_id,
@@ -431,6 +438,18 @@ pub(crate) async fn push_entry_outbox<C: DayOneApiClient>(
         master_key.as_deref(),
         user_keys_json.as_deref(),
     )?;
+
+    if item.operation == "update" {
+        crate::sync::entry_lock::check_upload(
+            store,
+            api,
+            profile_id,
+            journal_id,
+            entry_id,
+            &journal_value,
+        )
+        .await?;
+    }
 
     let response_bytes = match api
         .put_entry_multipart(

@@ -255,14 +255,72 @@ impl Store {
         payload_json: &str,
         next_attempt_epoch_ms: i64,
     ) -> StoreResult<()> {
+        self.enqueue_outbox_item_with_policy(
+            id,
+            resource,
+            operation,
+            object_id,
+            payload_json,
+            next_attempt_epoch_ms,
+            true,
+        )
+        .map(|_| ())
+    }
+
+    pub(crate) fn enqueue_outbox_item_from_pull(
+        &self,
+        id: &str,
+        resource: &str,
+        operation: &str,
+        object_id: &str,
+        payload_json: &str,
+        next_attempt_epoch_ms: i64,
+    ) -> StoreResult<bool> {
+        self.enqueue_outbox_item_with_policy(
+            id,
+            resource,
+            operation,
+            object_id,
+            payload_json,
+            next_attempt_epoch_ms,
+            false,
+        )
+    }
+
+    /// Requeue without changing the payload or erasing its previous failure.
+    /// Pull reconciliation must preserve recovery work until an upload settles it.
+    pub fn retry_failed_outbox_item(&self, id: &str) -> StoreResult<bool> {
         let conn = self.connect()?;
-        conn.execute(
+        Ok(conn.execute(
+            "UPDATE sync_outbox SET status = 'pending', attempt_count = 0, next_attempt_epoch_ms = 0, last_error = COALESCE(last_error, 'previous failure; manual retry requested'), updated_at = CURRENT_TIMESTAMP WHERE id = ?1 AND status = 'failed'",
+            params![id],
+        )? == 1)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_outbox_item_with_policy(
+        &self,
+        id: &str,
+        resource: &str,
+        operation: &str,
+        object_id: &str,
+        payload_json: &str,
+        next_attempt_epoch_ms: i64,
+        retry_failed: bool,
+    ) -> StoreResult<bool> {
+        let conn = self.connect()?;
+        let changed = conn.execute(
             r#"
             INSERT INTO sync_outbox (
               id, resource, operation, object_id, payload_json,
               status, attempt_count, next_attempt_epoch_ms, last_error, created_at, updated_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, 'pending', 0, ?6, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            SELECT ?1, ?2, ?3, ?4, ?5, 'pending', 0, ?6, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            WHERE ?7 OR NOT EXISTS (
+              SELECT 1 FROM sync_outbox
+              WHERE resource = ?2 AND object_id = ?4
+                AND (status = 'failed' OR last_error IS NOT NULL)
+            )
             ON CONFLICT(id) DO UPDATE SET
               resource = excluded.resource,
               operation = excluded.operation,
@@ -285,10 +343,19 @@ impl Store {
                 ELSE NULL
               END,
               updated_at = CURRENT_TIMESTAMP
+            WHERE ?7 OR sync_outbox.status != 'failed'
             "#,
-            params![id, resource, operation, object_id, payload_json, next_attempt_epoch_ms],
+            params![
+                id,
+                resource,
+                operation,
+                object_id,
+                payload_json,
+                next_attempt_epoch_ms,
+                retry_failed
+            ],
         )?;
-        Ok(())
+        Ok(changed > 0)
     }
 
     pub fn list_outbox_item_details(
@@ -488,8 +555,8 @@ impl Store {
         )?)
     }
 
-    /// Clears queued work settled by a server pull while retaining failed rows
-    /// as explicit recovery records for `dayone outbox list --payload`.
+    /// Clear settled work, but retain failed uploads and their pending retries
+    /// until an upload succeeds or the user explicitly clears the recovery record.
     pub fn delete_settled_entry_outbox_for_entry(
         &self,
         journal_id: &str,
@@ -501,7 +568,7 @@ impl Store {
             DELETE FROM sync_outbox
             WHERE resource = 'entry'
               AND object_id = ?1
-              AND status != 'failed'
+              AND status != 'failed' AND last_error IS NULL
             "#,
             params![format!("{journal_id}:{entry_id}")],
         )?;
