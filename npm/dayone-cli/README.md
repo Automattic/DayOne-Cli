@@ -46,7 +46,11 @@ dayone sync-schedule enable --interval-minutes 30
 
 ## Privacy controls
 
-The CLI uses Sentry for error diagnostics and Automattic Tracks for product-usage analytics. Tracks is disabled for staging and custom API endpoints unless `DAYONE_TRACKS_ENDPOINT` explicitly selects a development or test endpoint. Disable both reporting systems with either environment variable:
+Telemetry is **off until you opt in**, everywhere. Interactive commands that could collect telemetry ask for consent; unattended commands continue with telemetry off. Seeing an older default-on notice does not grant consent.
+
+Use `dayone telemetry status`, `dayone telemetry enable`, or `dayone telemetry disable` to manage the choice locally. The CLI uses Sentry for error diagnostics and Automattic Tracks for usage analytics. Tracks includes a pseudonymous installation ID and approximate IP-derived location, but not journal content or your Day One account ID. Sentry filters error text, but some server-provided text can remain. Read the [full disclosure and release-review items](https://github.com/Automattic/DayOne-Cli/blob/main/docs/telemetry.md).
+
+Tracks is disabled for staging and custom API endpoints unless `DAYONE_TRACKS_ENDPOINT` selects a test endpoint. Consent is still required. Disable both reporting systems with either environment variable:
 
 ```bash
 DO_NOT_TRACK=1 dayone sync

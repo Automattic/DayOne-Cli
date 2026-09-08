@@ -6,6 +6,7 @@ mod comment_codec;
 mod comment_feed;
 mod comment_flags;
 mod config;
+mod consent;
 mod constants;
 mod diagnostics;
 mod entry;
@@ -28,10 +29,10 @@ async fn main() -> std::process::ExitCode {
     crate::env_util::apply_shared_dayone_secrets_from_config();
     // Hold the guard for the lifetime of `main` so Sentry's transport flushes
     // when `main` returns. `std::process::exit` would skip destructors.
-    let _telemetry = telemetry::init();
+    let mut telemetry = telemetry::TelemetryGuard::default();
     diagnostics::install_panic_hook();
 
-    let result = cli::run().await;
+    let result = cli::run(&mut telemetry).await;
     let sentry_event_id = match &result {
         Ok(()) => None,
         Err(err) => {

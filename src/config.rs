@@ -15,18 +15,38 @@ pub struct ProfileConfig {
     pub base_url: String,
 }
 
-/// Install-level analytics configuration.
-///
-/// The anonymous id is generated once on first run and is stable across
-/// profiles, mirroring the per-browser anonymous id used by Day One Web. It
-/// identifies events fired before sign-in and is aliased to the Day One user
-/// id on login.
+/// Consent applies to the disclosure version shown when the choice was made.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ConsentState {
+    #[default]
+    Unknown,
+    Granted,
+    Denied,
+}
+
+/// Installation identity and local telemetry preferences. Legacy
+/// `notice_shown` values are ignored: seeing the old notice was not consent.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct AnalyticsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anonymous_id: Option<String>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub notice_shown: bool,
+    #[serde(default)]
+    pub consent: ConsentState,
+    #[serde(default)]
+    pub consent_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent_recorded_at_ms: Option<i64>,
+    #[serde(default)]
+    pub notice_version: u32,
+}
+
+impl AnalyticsConfig {
+    pub fn consent_granted(&self) -> bool {
+        self.consent == ConsentState::Granted
+            && self.consent_version == crate::consent::DISCLOSURE_VERSION
+            && self.consent_recorded_at_ms.is_some_and(|time| time > 0)
+    }
 }
 
 /// Top-level application configuration persisted as TOML.
@@ -87,6 +107,7 @@ impl AppConfig {
     /// Load config from `{config_dir}/config.toml`, persisting the default
     /// config to disk when the file does not yet exist.
     pub fn load_or_create(config_dir: &Path) -> Result<Self, ConfigError> {
+        let _lock = Self::lock(config_dir)?;
         let path = config_dir.join(CONFIG_FILE_NAME);
         #[cfg(unix)]
         if path.exists() {
@@ -99,21 +120,38 @@ impl AppConfig {
         Ok(config)
     }
 
-    /// Print and persist the one-time telemetry disclosure.
-    pub fn show_telemetry_notice_once(&mut self, config_dir: &Path) {
-        if self.analytics.notice_shown {
-            return;
-        }
-        eprintln!(
-            "Day One CLI telemetry is enabled by default. It can send data about CLI use and reports about unexpected errors and crashes. Usage analytics is anonymous and is not linked to your Day One account. Telemetry does not include journal or entry content. Disable it with DO_NOT_TRACK=1 or DAYONE_TELEMETRY=0. You can save either setting in ~/.config/dayone/secrets-cli."
-        );
-        self.analytics.notice_shown = true;
-        // Disclosure persistence must never make the user's command fail.
-        let _ = self.save(config_dir);
+    /// Serialize read-modify-write operations across processes. Reading fresh
+    /// data under the lock prevents profile and ID saves from undoing consent.
+    pub fn update(
+        config_dir: &Path,
+        change: impl FnOnce(&mut Self) -> anyhow::Result<()>,
+    ) -> anyhow::Result<Self> {
+        let _lock = Self::lock(config_dir)?;
+        let mut config = Self::load(config_dir)?;
+        change(&mut config)?;
+        config.save(config_dir)?;
+        Ok(config)
+    }
+
+    fn lock(config_dir: &Path) -> Result<fs::File, ConfigError> {
+        fs::create_dir_all(config_dir).map_err(|e| ConfigError::Io(config_dir.to_owned(), e))?;
+        #[cfg(unix)]
+        set_owner_only_permissions(config_dir, 0o700)?;
+        let path = config_dir.join(".config.lock");
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let file = options
+            .open(&path)
+            .map_err(|e| ConfigError::Io(path.clone(), e))?;
+        file.lock().map_err(|e| ConfigError::Io(path, e))?;
+        Ok(file)
     }
 
     /// Save config to `{config_dir}/config.toml`.
     ///
+    /// Runtime modifications must use `update` to avoid stale writes.
     /// Uses write-to-temp-then-rename with a backup to minimise the window
     /// where the config file could be missing. On Unix the rename is atomic;
     /// on Windows we back up the existing file first and restore it if the
@@ -341,19 +379,6 @@ mod tests {
         // A subsequent plain load should return the same config.
         let reloaded = AppConfig::load(dir.path()).unwrap();
         assert_eq!(config, reloaded);
-    }
-
-    #[test]
-    fn telemetry_notice_is_persisted_once() {
-        let dir = test_config_dir("telemetry-notice");
-        let mut config = AppConfig::load_or_create(dir.path()).unwrap();
-        assert!(!config.analytics.notice_shown);
-
-        config.show_telemetry_notice_once(dir.path());
-        assert!(AppConfig::load(dir.path()).unwrap().analytics.notice_shown);
-
-        config.show_telemetry_notice_once(dir.path());
-        assert!(AppConfig::load(dir.path()).unwrap().analytics.notice_shown);
     }
 
     #[test]

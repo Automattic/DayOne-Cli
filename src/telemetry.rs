@@ -1,7 +1,7 @@
 //! Sentry-backed error monitoring for the CLI.
 //!
 //! When the `telemetry` cargo feature is enabled (default), this module
-//! initialises Sentry at startup, installs a panic hook (via Sentry's panic
+//! initializes Sentry after consent, installs a panic hook (via Sentry's panic
 //! integration), and provides helpers for capturing `anyhow::Error` from the
 //! top-level command dispatcher. With the feature disabled the binary has no
 //! Sentry dependency: [`init`], [`set_command`], [`set_profile`], and
@@ -11,8 +11,8 @@
 //!
 //! # Opt-out
 //!
-//! Telemetry is on by default. End users can disable it at runtime by setting
-//! either of:
+//! Telemetry requires a saved agreement to the current disclosure. These
+//! environment settings override agreement and disable it:
 //!
 //! - `DAYONE_TELEMETRY=0` (or `false`/`off`/`no`/`disabled`)
 //! - `DO_NOT_TRACK=1` (per <https://consoledonottrack.com/>)
@@ -116,6 +116,7 @@ impl StdError for UserError {}
 ///
 /// Holding the guard until shutdown is what flushes Sentry's transport. With
 /// the `telemetry` feature off, dropping the guard is a no-op.
+#[derive(Default)]
 pub struct TelemetryGuard {
     #[cfg(feature = "telemetry")]
     _inner: Option<sentry::ClientInitGuard>,
@@ -124,23 +125,26 @@ pub struct TelemetryGuard {
 /// Initialise Sentry.
 ///
 /// Returns a no-op guard when the `telemetry` feature is disabled, when the
-/// user has opted out via env var, or when no DSN is configured (compile-time
-/// `DAYONE_SENTRY_DSN` empty and runtime override unset).
-pub fn init() -> TelemetryGuard {
+/// user has not consented or has opted out via env var, or when no DSN is
+/// configured (compile-time `DAYONE_SENTRY_DSN` empty and runtime override unset).
+pub fn init(config: &crate::config::AppConfig, config_dir: &std::path::Path) -> TelemetryGuard {
     #[cfg(not(feature = "telemetry"))]
     {
+        let _ = (config, config_dir);
         TelemetryGuard {}
     }
 
     #[cfg(feature = "telemetry")]
     {
-        if !is_enabled() {
+        if !is_enabled() || !config.analytics.consent_granted() {
             return TelemetryGuard { _inner: None };
         }
         let Some(dsn) = dsn() else {
             return TelemetryGuard { _inner: None };
         };
 
+        let config_dir = config_dir.to_owned();
+        let recorded_at_ms = config.analytics.consent_recorded_at_ms.unwrap();
         let guard = sentry::init((
             dsn,
             sentry::ClientOptions {
@@ -148,7 +152,13 @@ pub fn init() -> TelemetryGuard {
                 environment: Some(environment().into()),
                 send_default_pii: false,
                 attach_stacktrace: true,
-                before_send: Some(std::sync::Arc::new(scrub::event)),
+                before_send: Some(std::sync::Arc::new(move |event| {
+                    if crate::consent::still_permitted(&config_dir, recorded_at_ms) {
+                        scrub::event(event)
+                    } else {
+                        None
+                    }
+                })),
                 ..Default::default()
             },
         ));
@@ -171,8 +181,8 @@ pub fn init() -> TelemetryGuard {
 
 /// Returns `true` when telemetry should run based on opt-out env signals.
 ///
-/// Has no callers when the `telemetry` feature is disabled, but is kept
-/// `pub` so tests cover the gating logic in every build configuration.
+/// This is only the environment gate, not permission to collect. Consent
+/// and collector-specific settings must also permit reporting.
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
 pub fn is_enabled() -> bool {
     if std::env::var("DO_NOT_TRACK").as_deref().map(str::trim) == Ok("1") {
@@ -189,11 +199,25 @@ pub fn is_enabled() -> bool {
     true
 }
 
-/// Whether this build has an active Sentry client for the current invocation.
+/// Whether Sentry is configured to collect, before resolving consent.
+pub fn would_collect() -> bool {
+    #[cfg(feature = "telemetry")]
+    {
+        is_enabled() && dsn().is_some_and(|value| value.parse::<sentry::types::Dsn>().is_ok())
+    }
+    #[cfg(not(feature = "telemetry"))]
+    {
+        false
+    }
+}
+
+/// Whether Sentry has actually been initialized after consent this invocation.
 pub fn is_sentry_enabled() -> bool {
     #[cfg(feature = "telemetry")]
     {
-        is_enabled() && dsn().is_some()
+        sentry::Hub::current()
+            .client()
+            .is_some_and(|client| client.is_enabled())
     }
     #[cfg(not(feature = "telemetry"))]
     {

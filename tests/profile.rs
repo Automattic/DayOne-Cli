@@ -42,16 +42,13 @@ fn parse_json(raw: &str) -> Value {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn first_run_telemetry_notice_uses_stderr_once() {
+fn profile_commands_do_not_request_or_advertise_telemetry() {
     let config_dir = unique_tmp_dir("telemetry-notice");
 
     let first = run_dayone(&config_dir, &["profile", "list"]);
     assert!(first.status.success());
     parse_json(&String::from_utf8(first.stdout).expect("stdout should be utf8"));
-    let stderr = String::from_utf8_lossy(&first.stderr);
-    assert!(stderr.contains("telemetry is enabled by default"));
-    assert!(stderr.contains("Usage analytics is anonymous"));
-    assert!(stderr.contains("not linked to your Day One account"));
+    assert!(first.stderr.is_empty());
 
     let second = run_dayone(&config_dir, &["profile", "list"]);
     assert!(second.status.success());

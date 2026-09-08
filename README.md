@@ -334,18 +334,20 @@ On startup, before parsing arguments, the CLI loads `KEY=value` lines from `~/.c
 
 ### Telemetry and analytics
 
-The CLI shows a one-time notice about telemetry on first run and records that it was shown in `config.toml`. The notice is written to stderr so JSON command output on stdout remains machine-readable.
+Telemetry is **off until you opt in**, regardless of locale or location. An interactive invocation that could collect telemetry asks for consent; pressing Enter declines. Unattended commands continue with telemetry off and never use piped input to request consent. Notices go to stderr so stdout remains machine-readable JSON. Existing installations must opt in too: seeing an older notice is not consent.
+
+Manage the choice locally with `dayone telemetry status`, `dayone telemetry enable`, or `dayone telemetry disable`. The CLI stores the decision, disclosure version, and timestamp in `config.toml`. No reporting client starts during argument parsing, configuration loading, or consent resolution. Full collection details and outstanding release-review items are in [Telemetry](docs/telemetry.md).
 
 The CLI uses Sentry for unexpected errors and Automattic Tracks for product-usage analytics. When enabled, Sentry reports can include the command, profile category (`production`, `staging`, or `custom`), OS/architecture, release, environment, and error chain. Before sending, the CLI removes Sentry's user and server-name fields, removes HTTP response bodies, and scrubs home paths, URLs, email-shaped strings, and long token-shaped strings from common message fields. Other server-provided error text can still appear, so use one of the opt-outs below if you do not want reports sent.
 
-Tracks events contain command and event categories, booleans, a signed-in flag, version/platform information, subscription tier, outcomes, counts, and durations. They do not include journal content, titles, bodies, emails, or tokens. CLI analytics are **not linked to your Day One account**: every event is attributed only to an install-level anonymous id, before and after you sign in. Your Day One user id is never used as the analytics identity and is never sent. Tracks is disabled for staging and custom API endpoints unless `DAYONE_TRACKS_ENDPOINT` explicitly selects a development or test endpoint. Events are queued locally and flushed at the end of an invocation. A stalled Tracks request can delay exit by up to about 2.5 seconds, but analytics cannot change a command's result; unsent events are retried on a later run.
+Tracks events contain command and event categories, booleans, a signed-in flag, version/platform information, subscription tier, outcomes, counts, and durations. They do not include journal content, titles, bodies, emails, or tokens. The ingestion service also derives approximate location from your IP address. This is pseudonymous personal data, not anonymous data. CLI analytics are **not linked to your Day One account**: every event is attributed only to a pseudonymous installation ID, before and after you sign in. Your Day One user id is never used as the analytics identity and is never sent. Tracks is disabled for staging and custom API endpoints unless `DAYONE_TRACKS_ENDPOINT` explicitly selects a development or test endpoint. Events are queued locally and flushed at the end of an invocation. A stalled Tracks request can delay exit by up to about 2.5 seconds, but analytics cannot change a command's result; unsent events are retried on a later run.
 
-Both are disabled together by either of these (read from the environment, so they can live in `secrets-cli`):
+Both are disabled together by `dayone telemetry disable` or either of these (read from the environment, so they can live in `secrets-cli`):
 
 - `DO_NOT_TRACK=1` (per [consoledonottrack.com](https://consoledonottrack.com/))
 - `DAYONE_TELEMETRY=0` (also accepts `false`/`off`/`no`/`disabled`)
 
-Analytics additionally respects your account's **Usage Statistics** setting (`track_usage_statistics`) once synced. An install-level anonymous id is stored in `config.toml` under `[analytics]`.
+Analytics additionally respects your account's **Usage Statistics** setting (`track_usage_statistics`) once synced. The installation ID is created only when consent and the Tracks settings permit collection, and is stored in `config.toml` under `[analytics]`.
 
 ## Troubleshooting and support
 

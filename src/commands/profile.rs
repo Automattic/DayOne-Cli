@@ -39,7 +39,6 @@ pub fn list(config: &AppConfig) -> Result<ProfileListOutput> {
 
 pub fn set(
     config_dir: &Path,
-    config: &AppConfig,
     profile_name: &str,
     custom_base_url: Option<&str>,
 ) -> Result<ProfileSetOutput> {
@@ -51,33 +50,33 @@ pub fn set(
         return Err(anyhow!("invalid profile name: {name}"));
     }
 
-    let mut config = config.clone();
-
-    // A profile's API origin is part of its credential identity. Create a new
-    // profile instead of rebinding an existing profile and its local data.
-    if let Some(url) = custom_base_url {
-        let normalized = normalize_base_url(url)?;
-        if let Some(existing) = config.profiles.get(name) {
-            if normalize_base_url(&existing.base_url)? != normalized {
-                return Err(anyhow!(
-                    "profile '{name}' already uses '{}'; create a new profile name for '{normalized}'",
-                    existing.base_url
-                ));
+    let config = AppConfig::update(config_dir, |config| {
+        // A profile's API origin is part of its credential identity. Create a new
+        // profile instead of rebinding an existing profile and its local data.
+        if let Some(url) = custom_base_url {
+            let normalized = normalize_base_url(url)?;
+            if let Some(existing) = config.profiles.get(name) {
+                if normalize_base_url(&existing.base_url)? != normalized {
+                    return Err(anyhow!(
+                        "profile '{name}' already uses '{}'; create a new profile name for '{normalized}'",
+                        existing.base_url
+                    ));
+                }
+            } else {
+                config.profiles.insert(
+                    name.to_owned(),
+                    ProfileConfig {
+                        base_url: normalized,
+                    },
+                );
             }
-        } else {
-            config.profiles.insert(
-                name.to_owned(),
-                ProfileConfig {
-                    base_url: normalized,
-                },
-            );
+        } else if !config.profiles.contains_key(name) {
+            return Err(anyhow!("profile '{name}' not found"));
         }
-    } else if !config.profiles.contains_key(name) {
-        return Err(anyhow!("profile '{name}' not found"));
-    }
 
-    config.active_profile = name.to_owned();
-    config.save(config_dir)?;
+        config.active_profile = name.to_owned();
+        Ok(())
+    })?;
 
     let pc = config
         .profiles
@@ -125,7 +124,7 @@ mod tests {
         let config = AppConfig::default_config();
         config.save(dir.path()).unwrap();
 
-        let output = set(dir.path(), &config, "production", None).unwrap();
+        let output = set(dir.path(), "production", None).unwrap();
         assert_eq!(output.ok, true);
         assert_eq!(output.active.name, "production");
         assert_eq!(output.active.is_active, true);
@@ -141,13 +140,7 @@ mod tests {
         let config = AppConfig::default_config();
         config.save(dir.path()).unwrap();
 
-        let output = set(
-            dir.path(),
-            &config,
-            "custom",
-            Some("https://custom.example.com"),
-        )
-        .unwrap();
+        let output = set(dir.path(), "custom", Some("https://custom.example.com")).unwrap();
         assert_eq!(output.active.name, "custom");
         assert_eq!(output.active.base_url, "https://custom.example.com");
 
@@ -164,7 +157,6 @@ mod tests {
 
         let error = set(
             dir.path(),
-            &config,
             "staging",
             Some("https://new-staging.example.com"),
         )
@@ -184,7 +176,7 @@ mod tests {
         let config = AppConfig::default_config();
         config.save(dir.path()).unwrap();
 
-        let result = set(dir.path(), &config, "nonexistent", None);
+        let result = set(dir.path(), "nonexistent", None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
@@ -192,9 +184,8 @@ mod tests {
     #[test]
     fn set_rejects_empty_name() {
         let dir = test_dir("set-empty");
-        let config = AppConfig::default_config();
 
-        let result = set(dir.path(), &config, "", None);
+        let result = set(dir.path(), "", None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty"));
     }
@@ -202,9 +193,8 @@ mod tests {
     #[test]
     fn set_rejects_invalid_name() {
         let dir = test_dir("set-invalid");
-        let config = AppConfig::default_config();
 
-        let result = set(dir.path(), &config, "../escape", None);
+        let result = set(dir.path(), "../escape", None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("invalid"));
     }
@@ -215,7 +205,7 @@ mod tests {
         let config = AppConfig::default_config();
         config.save(dir.path()).unwrap();
 
-        let output = set(dir.path(), &config, "  staging  ", None).unwrap();
+        let output = set(dir.path(), "  staging  ", None).unwrap();
         assert_eq!(output.active.name, "staging");
     }
 }
