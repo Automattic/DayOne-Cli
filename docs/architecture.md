@@ -60,18 +60,26 @@ This means the CLI works fine offline for reads, and queues writes that get push
 `src/main.rs` is a thin async wrapper that calls `src/cli/mod.rs`:
 
 ```rust
-// src/main.rs
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
     crate::env_util::apply_shared_dayone_secrets_from_config();
-    let _telemetry = telemetry::init();
-    match cli::run().await {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+    let mut telemetry = telemetry::TelemetryGuard::default();
+    diagnostics::install_panic_hook();
+
+    let result = cli::run(&mut telemetry).await;
+    let sentry_event_id = match &result {
+        Ok(()) => None,
         Err(err) => {
             eprintln!("{err:#}");
-            telemetry::capture_anyhow(&err);
-            std::process::ExitCode::FAILURE
+            telemetry::capture_anyhow(err)
         }
+    };
+    diagnostics::finish(&result, sentry_event_id.as_deref());
+
+    if result.is_ok() {
+        std::process::ExitCode::SUCCESS
+    } else {
+        std::process::ExitCode::FAILURE
     }
 }
 ```
@@ -738,17 +746,17 @@ entry_embeddings_vec USING vec0(   -- sqlite-vec virtual table
 
 ## Telemetry and Analytics
 
-The CLI has two reporting paths, both disabled until the user agrees to the current disclosure. `src/consent.rs` handles a worldwide opt-in policy; there is no region detection. `telemetry enable`, `disable`, and `status` operate on configuration without opening a profile database or initializing either collector. A saved decision includes a disclosure version and timestamp; the legacy `notice_shown` flag never grants consent.
+`src/consent.rs` implements opt-in for Tracks and Sentry. Consent is recorded in `config.toml` with a disclosure version and decision timestamp. The `telemetry enable`, `disable`, and `status` commands operate on configuration without opening a profile database or starting a collector.
 
-Interactive invocations that could collect ask for consent. Unattended invocations continue with reporting disabled. The preflight respects the cached account analytics opt-out as well as endpoint and environment settings. Both collectors recheck saved consent before collection so withdrawal affects running commands; requests already in flight cannot be recalled.
+Interactive commands prompt when a collector could run. Unattended commands continue with reporting off until consent is recorded. Endpoint, environment, and cached account settings determine whether collection is otherwise enabled.
 
 ### Error monitoring (Sentry)
 
-`src/telemetry.rs` initializes Sentry only after configuration, store initialization, and consent resolution (behind the default `telemetry` cargo feature). Main holds the client guard until after top-level error reporting. The Sentry `before_send` callback rechecks the saved consent before filtering the event. Expected, user-facing failures are wrapped in `telemetry::UserError` so they never reach Sentry. Event messages are scrubbed of `$HOME` paths, emails, and token-shaped strings.
+`src/telemetry.rs` initializes Sentry after configuration, store initialization, and consent resolution. The default `telemetry` Cargo feature includes Sentry. Main retains its client guard through error reporting. The `before_send` callback rechecks consent and filters sensitive fields. Errors marked as `telemetry::UserError` are excluded from reporting.
 
 ### Product analytics (Automattic Tracks)
 
-`src/analytics/` reports product usage into Automattic Tracks — the same pipeline as Day One Web — with the platform prefix `dayone_cli_`. The flush is best-effort and time-bounded (awaited at the end of an invocation but capped at a single request timeout), so analytics never noticeably delays or breaks a command:
+`src/analytics/` sends usage events to Automattic Tracks with the prefix `dayone_cli_`. It rechecks consent before recording events and starting a flush. Flush runs at the end of an invocation, with a time budget of one request timeout plus 500 ms. Analytics failures do not fail the command:
 
 ```
 handler ──track(event, props)──▶ analytics_events (SQLite queue)
@@ -757,15 +765,15 @@ run() end / `dayone sync` ──flush──▶ drain queue ──POST batch─�
                                         │ (2xx → delete rows; else bump attempts & retry)
 ```
 
-- **Transport** (`tracks.rs`) is a `POST` of the whole queued batch to `https://public-api.wordpress.com/rest/v1.1/tracks/record` as `{ "commonProps": { "_ui", "_ut", "_rt" }, "events": [...] }`. Real Tracks delivery is enabled only for the production Day One API. Setting `DAYONE_TRACKS_ENDPOINT` explicitly enables local or test delivery for staging and custom API endpoints. This is the Field Guide's recommended ingestion for standalone clients (vs. the browser `_tkq` pixel or PHP/native libraries) and lets one flush drain the entire queue in a single request. Event and property names are validated against `^[a-z_][a-z0-9_]*$` (names that fail land in `tracks_rejects`).
-- **Durable queue** (`store/analytics.rs`, migration `0013_analytics.sql`) holds events in the per-profile SQLite database so an offline or short-lived invocation never loses or blocks on them. The queue is capped at 500 rows and events older than 30 days are dropped on flush.
-- **Identity** (`identity.rs`) is a pseudonymous installation ID (`_ut = anon`), generated only after consent when Tracks is enabled and persisted under `[analytics]`. It stays installation-scoped after sign-in; the CLI never emits `_aliasUser` or uses the Day One user ID as its analytics identity. A changed consent decision removes the ID. Before initialization, Tracks discards queue rows at or before the current agreement timestamp; a failed cleanup disables Tracks for that invocation.
+- **Transport** (`tracks.rs`) sends batches to `https://public-api.wordpress.com/rest/v1.1/tracks/record` as `{ "commonProps": { "_ui", "_ut", "_rt" }, "events": [...] }`. Delivery is enabled for the production Day One API; `DAYONE_TRACKS_ENDPOINT` selects a test endpoint for other environments. Consent is required in either case. Event and property names must match `^[a-z_][a-z0-9_]*$`.
+- **Queue** (`store/analytics.rs`, migration `0013_analytics.sql`) stores up to 500 events per profile in SQLite. Each flush considers up to 50 events and drops events older than 30 days.
+- **Identity** (`identity.rs`) is a pseudonymous installation ID (`_ut = anon`), generated after consent and stored under `[analytics]`. It remains installation-scoped after sign-in. Changing consent clears the ID. During initialization, Tracks discards events at or before the current agreement timestamp; if cleanup fails, Tracks stays disabled for that invocation.
 - **Events** map to Day One Web's vocabulary where they apply (`user_sign_in`, `entry_create`, `journal_create`, `entry_comment_added`, …), plus a generic `command_run` lifecycle event fired once per invocation with `command`, `subcommand`, `outcome`, and `duration_ms`.
 
 ### Opt-out
 
-Both paths are disabled when the user opts out via `DO_NOT_TRACK=1` or `DAYONE_TELEMETRY=0` (analytics reuses `telemetry::is_enabled()`). Analytics additionally honours the server-side `track_usage_statistics` account setting (cached locally from `/api/user-settings`), defaulting to enabled when unknown. Tracks event properties are restricted by an allowlist and exclude journal content, titles, bodies, emails, and tokens. Sentry error filtering has different guarantees; see [Telemetry](telemetry.md).
+Both collectors honor `DO_NOT_TRACK=1` and `DAYONE_TELEMETRY=0`. Tracks also checks the cached `track_usage_statistics` account setting at startup. A missing account setting permits Tracks only when consent, endpoint, and environment checks also allow it. Tracks event properties are restricted by an allowlist and exclude journal content, titles, bodies, emails, and tokens. Sentry error filtering has different guarantees; see [Telemetry](telemetry.md).
 
 ---
 
-*Last updated: June 2026*
+*Last updated: September 2026*
