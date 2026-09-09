@@ -15,7 +15,7 @@ pub(crate) const OUTBOX_LEASE_TTL_MS: i64 = 15 * 60 * 1_000;
 pub(crate) const MAX_PAGE_LOOPS: usize = 10_000;
 pub(crate) const OUTBOX_BATCH_SIZE: usize = 50;
 pub(crate) const OUTBOX_MAX_ATTEMPTS: i64 = 8;
-pub(crate) const OUTBOX_DEFER_MISSING_KEYS_DELAY_MS: i64 = 30_000;
+pub(crate) const OUTBOX_DEFER_DELAY_MS: i64 = 30_000;
 
 #[derive(Debug, Serialize)]
 pub struct ResourceSyncOutput {

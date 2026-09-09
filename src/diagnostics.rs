@@ -687,6 +687,12 @@ pub fn route_template(path: &str) -> &'static str {
         _ if path.starts_with("/v2/sync/entries/") && path.ends_with("/feed") => {
             "/v2/sync/entries/{journal}/feed"
         }
+        _ if path.starts_with("/shares/")
+            && path.contains("/entries/")
+            && path.ends_with("/lock") =>
+        {
+            "/shares/{journal}/entries/{entry}/lock"
+        }
         _ if path.starts_with("/v3/sync/entries/") => "/v3/sync/entries/{journal}/{entry}",
         _ if path.starts_with("/v3/sync/journals/") => "/v3/sync/journals/{journal}",
         _ if path.starts_with("/labs/ai/daily-chat/") => "/labs/ai/daily-chat/{date}",

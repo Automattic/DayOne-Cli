@@ -13,6 +13,7 @@ pub(crate) async fn drain_sync_outbox<C: DayOneApiClient>(
     let mut changed_count = 0_i64;
     let mut status = "success".to_owned();
     let mut error: Option<String> = None;
+    let mut deferred_reason: Option<String> = None;
     let mut fatal_error: Option<String> = None;
 
     loop {
@@ -90,11 +91,12 @@ pub(crate) async fn drain_sync_outbox<C: DayOneApiClient>(
                 }
                 Err(err) => {
                     let err_text = err.to_string();
-                    let should_defer = should_defer_outbox_item_until_keys(&item, &err);
+                    let waiting_for_lock = matches!(&err, OutboxProcessError::EntryEditLocked);
+                    let should_defer =
+                        waiting_for_lock || should_defer_outbox_item_until_keys(&item, &err);
                     if should_defer {
                         let defer_attempt = item.attempt_count;
-                        let defer_ms =
-                            now_epoch_ms().saturating_add(OUTBOX_DEFER_MISSING_KEYS_DELAY_MS);
+                        let defer_ms = now_epoch_ms().saturating_add(OUTBOX_DEFER_DELAY_MS);
                         if let Err(db_err) = store.mark_outbox_item_deferred(
                             &item.id,
                             &item.payload_json,
@@ -134,13 +136,16 @@ pub(crate) async fn drain_sync_outbox<C: DayOneApiClient>(
                             Some(&err),
                         );
                         status = "deferred".to_owned();
-                        if error.is_none() {
-                            error = Some(err_text.clone());
+                        if deferred_reason.is_none() {
+                            deferred_reason = Some(err_text.clone());
                         }
                         log_sync(format!(
                             "outbox item deferred id={} attempt={} err={}",
                             item.id, defer_attempt, err_text
                         ));
+                        if waiting_for_lock {
+                            continue;
+                        }
                         stop_processing = true;
                         break;
                     }
@@ -193,7 +198,7 @@ pub(crate) async fn drain_sync_outbox<C: DayOneApiClient>(
                             stop_processing = true;
                             break;
                         }
-                        OutboxProcessError::Retryable(_) => {}
+                        OutboxProcessError::Retryable(_) | OutboxProcessError::EntryEditLocked => {}
                     }
 
                     let next_attempt = item.attempt_count + 1;
@@ -284,6 +289,7 @@ pub(crate) async fn drain_sync_outbox<C: DayOneApiClient>(
     }
 
     let finished = now_epoch_ms();
+    let error = error.or(deferred_reason);
     resources.push(ResourceSyncOutput {
         resource: resource_name.to_owned(),
         started_at_epoch_ms: started,
@@ -359,6 +365,7 @@ pub(crate) async fn push_entry_outbox<C: DayOneApiClient>(
     let entry_id = payload.entry_id.as_str();
 
     let persisted_user_edit_date = store.get_entry_user_edit_date(entry_id)?;
+    let has_snapshot = payload.entry_json.is_some();
     let mut entry_content_value = if let Some(snapshot) = payload.entry_json.take() {
         snapshot
     } else {
@@ -388,11 +395,17 @@ pub(crate) async fn push_entry_outbox<C: DayOneApiClient>(
                 .and_then(|value| entry_date_value_to_f64(Some(value)))
         })
         .unwrap_or(now_epoch_ms() as f64);
-    let edit_date_epoch_ms = resolve_outbox_edit_date_epoch_ms(
-        &payload,
-        &entry_content,
-        persisted_user_edit_date.as_deref(),
-    );
+    let edit_date_epoch_ms = if has_snapshot {
+        queued_entry_edit_date_epoch_ms(&payload, &entry_content).ok_or_else(|| OutboxProcessError::NonRetryable {
+            reason: "queued entry snapshot has no saved edit timestamp; inspect dayone outbox list --payload before recovery".to_owned(),
+        })?
+    } else {
+        resolve_outbox_edit_date_epoch_ms(
+            &payload,
+            &entry_content,
+            persisted_user_edit_date.as_deref(),
+        )
+    };
     let envelope = if is_delete {
         json!({
             "entryId": entry_id,
@@ -431,6 +444,18 @@ pub(crate) async fn push_entry_outbox<C: DayOneApiClient>(
         master_key.as_deref(),
         user_keys_json.as_deref(),
     )?;
+
+    if item.operation == "update" {
+        crate::sync::entry_lock::check_upload(
+            store,
+            api,
+            profile_id,
+            journal_id,
+            entry_id,
+            &journal_value,
+        )
+        .await?;
+    }
 
     let response_bytes = match api
         .put_entry_multipart(

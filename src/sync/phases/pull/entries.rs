@@ -392,7 +392,7 @@ fn queue_local_entry_update_if_newer(
         "queued_at": queued_at,
         "queued_at_epoch_ms": now_ms
     });
-    store.enqueue_outbox_item(
+    let queued = store.enqueue_outbox_item_from_pull(
         &format!("entry:{journal_id}:{entry_id}"),
         "entry",
         operation,
@@ -400,9 +400,13 @@ fn queue_local_entry_update_if_newer(
         &outbox_payload.to_string(),
         now_ms,
     )?;
-    log_sync(format!(
-        "entry conflict kept newer local entry journal_id={journal_id} entry_id={entry_id}; queued {operation}"
-    ));
+    if queued {
+        log_sync(format!(
+            "entry conflict kept newer local entry journal_id={journal_id} entry_id={entry_id}; queued {operation}"
+        ));
+    } else {
+        log_sync("entry conflict retained failed upload for explicit recovery");
+    }
     Ok(true)
 }
 
@@ -2047,5 +2051,114 @@ mod tests {
             second_hash, None,
             "second entry should skip embedding after sync-run disable"
         );
+    }
+    #[test]
+    fn failed_entry_upload_is_not_revived_by_pull_reconciliation() {
+        let path = test_store_path("failed-entry-stays-failed");
+        let store = Store::open_at(&*path).unwrap();
+        store
+            .upsert_entry_json_row_with_edit_date(
+                "e",
+                "j",
+                Some("2000"),
+                None,
+                None,
+                r#"{"id":"e","body":"local"}"#,
+            )
+            .unwrap();
+        let payload = r#"{"journal_id":"j","entry_id":"e","entry_json":{"id":"e","body":"retained"},"queued_at_epoch_ms":2000}"#;
+        store
+            .enqueue_outbox_item("entry:j:e", "entry", "update", "j:e", payload, 0)
+            .unwrap();
+        store.lease_outbox_items(0, 1).unwrap();
+        store
+            .mark_outbox_item_failed("entry:j:e", payload, 8, Some("entry_edit_locked"))
+            .unwrap();
+        assert!(
+            queue_local_entry_update_if_newer(
+                &store,
+                "j",
+                "e",
+                &json!({"id":"e","user_edit_date":1000})
+            )
+            .unwrap()
+        );
+        let item = &store.list_outbox_item_details(true).unwrap()[0];
+        assert_eq!(item.status, "failed");
+        assert_eq!(item.payload_json.as_deref(), Some(payload));
+    }
+    #[test]
+    fn failed_legacy_entry_upload_does_not_create_a_second_pending_item() {
+        let path = test_store_path("failed-entry-stays-failed");
+        let store = Store::open_at(&*path).unwrap();
+        store
+            .upsert_entry_json_row_with_edit_date(
+                "e",
+                "j",
+                Some("2000"),
+                None,
+                None,
+                r#"{"id":"e","body":"local"}"#,
+            )
+            .unwrap();
+        let payload = r#"{"journal_id":"j","entry_id":"e","entry_json":{"id":"e","body":"retained"},"queued_at_epoch_ms":2000}"#;
+        store
+            .enqueue_outbox_item("legacy-entry:j:e", "entry", "update", "j:e", payload, 0)
+            .unwrap();
+        store.lease_outbox_items(0, 1).unwrap();
+        store
+            .mark_outbox_item_failed("legacy-entry:j:e", payload, 8, Some("entry_edit_locked"))
+            .unwrap();
+        assert!(
+            queue_local_entry_update_if_newer(
+                &store,
+                "j",
+                "e",
+                &json!({"id":"e","user_edit_date":1000})
+            )
+            .unwrap()
+        );
+        assert_eq!(store.list_outbox_item_details(true).unwrap().len(), 1);
+        let item = &store.list_outbox_item_details(true).unwrap()[0];
+        assert_eq!(item.status, "failed");
+        assert_eq!(item.payload_json.as_deref(), Some(payload));
+    }
+    #[test]
+    fn explicit_retry_keeps_its_snapshot_when_pull_sees_different_local_content() {
+        let path = test_store_path("retry-keeps-original-snapshot");
+        let store = Store::open_at(&*path).unwrap();
+        store
+            .upsert_entry_json_row_with_edit_date(
+                "e",
+                "j",
+                Some("2000"),
+                None,
+                None,
+                r#"{"id":"e","body":"different current local content"}"#,
+            )
+            .unwrap();
+        let payload = r#"{"journal_id":"j","entry_id":"e","entry_json":{"id":"e","body":"original retry content"},"queued_at_epoch_ms":1500}"#;
+        store
+            .enqueue_outbox_item("entry:j:e", "entry", "update", "j:e", payload, 0)
+            .unwrap();
+        store.lease_outbox_items(0, 1).unwrap();
+        store
+            .mark_outbox_item_failed("entry:j:e", payload, 8, Some("entry_edit_locked"))
+            .unwrap();
+        store.retry_failed_outbox_item("entry:j:e").unwrap();
+        queue_local_entry_update_if_newer(
+            &store,
+            "j",
+            "e",
+            &json!({"id":"e","user_edit_date":1000}),
+        )
+        .unwrap();
+        store
+            .delete_settled_entry_outbox_for_entry("j", "e")
+            .unwrap();
+        let items = store.list_outbox_item_details(true).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].payload_json.as_deref(), Some(payload));
+        assert_eq!(items[0].status, "pending");
     }
 }
