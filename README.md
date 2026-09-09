@@ -372,13 +372,13 @@ dayone outbox list --payload
 
 `--payload` can contain journal text and private identifiers. Inspect it locally and share it only through a private support channel.
 
-When `shared-journals-v2` is enabled, uploads to shared journals with “Anyone can edit” permissions check the server's read-only edit-lock endpoint. Another user or another device holding an active lease causes an `entry_edit_locked` failure. The queued contents remain available, and sync does not automatically retry that item. A lease held by this CLI's user and device permits upload. Personal journals, author-only shared journals, entry deletions, and media uploads do not make this check.
+When `shared-journals-v2` is enabled, uploads to shared journals with “Anyone can edit” permissions check the server's read-only edit-lock endpoint. If another user or device holds an active lease, the upload stays pending with an `entry_edit_locked` message. Sync continues other eligible uploads and reports the outbox as `deferred`. A later sync rechecks the lease after a 30-second delay; waiting does not consume upload retry attempts. Once unlocked, the next eligible sync uploads the saved content with its original edit timestamp, without requiring `outbox retry`. A lease held by this CLI's user and device permits upload. Personal journals, author-only shared journals, entry deletions, and media uploads do not make this check.
 
 The entry API handles both creation and updates. A newly created entry has no server lock: the documented missing-target response permits its upload. Other HTTP failures, unavailable endpoints, and malformed responses prevent upload and use the normal retry policy. The server must support `GET /api/shares/{journalId}/entries/{entryId}/lock` before this check can succeed.
 
 This is advisory protection, not conflict-free editing. A lease can change after the check, and a completed edit can still conflict with an older queued version after the lease ends.
 
-After reviewing the retained payload and the current shared entry, explicitly requeue one failed item:
+An actual server conflict (`outcome=dirty`) still fails the item and retains its payload for explicit recovery. After reviewing the retained payload and the current entry, explicitly requeue one failed item:
 
 ```bash
 dayone outbox retry --id <outbox-id>

@@ -19,14 +19,18 @@ use crate::sync::crypto::{
     journal_is_e2e_encrypted,
 };
 use crate::sync::engine::{
-    OUTBOX_BATCH_SIZE, OUTBOX_DEFER_MISSING_KEYS_DELAY_MS, OUTBOX_MAX_ATTEMPTS, ResourceSyncOutput,
-    log_sync, now_epoch_ms,
+    OUTBOX_BATCH_SIZE, OUTBOX_DEFER_DELAY_MS, OUTBOX_MAX_ATTEMPTS, ResourceSyncOutput, log_sync,
+    now_epoch_ms,
 };
 use crate::sync::phases::pull::crypto::{build_journal_decryptor, try_decrypt_journal_fields};
 use crate::util::encode_path_segment;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum OutboxProcessError {
+    #[error(
+        "entry_edit_locked: another client holds the edit lock; the upload is queued and will be checked again on a later sync"
+    )]
+    EntryEditLocked,
     #[error("{reason}")]
     NonRetryable { reason: String },
     #[error("{0}")]

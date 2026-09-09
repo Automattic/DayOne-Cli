@@ -104,7 +104,5 @@ pub(crate) async fn check_upload<C: DayOneApiClient>(
     if lease.holder_user_id == user_id && lease.holder_device_id == device.id {
         return Ok(());
     }
-    Err(OutboxProcessError::NonRetryable {
-        reason: "entry_edit_locked: another client holds the edit lock; local changes were retained. Inspect dayone outbox list --payload before explicitly retrying.".to_owned(),
-    })
+    Err(OutboxProcessError::EntryEditLocked)
 }

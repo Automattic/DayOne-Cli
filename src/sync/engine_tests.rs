@@ -436,8 +436,7 @@ async fn drain_outbox_defers_e2e_entry_unavailable_key_material_without_incremen
         "E2E key-material deferral must not burn the final retry attempt"
     );
     assert!(
-        (before + OUTBOX_DEFER_MISSING_KEYS_DELAY_MS..=after + OUTBOX_DEFER_MISSING_KEYS_DELAY_MS)
-            .contains(&next_attempt),
+        (before + OUTBOX_DEFER_DELAY_MS..=after + OUTBOX_DEFER_DELAY_MS).contains(&next_attempt),
         "deferred row should be scheduled with the key-availability delay"
     );
     assert!(
@@ -540,8 +539,7 @@ async fn drain_outbox_defers_e2e_comment_unavailable_key_material_without_http_c
         "E2E comment key-material deferral must not burn the final retry attempt"
     );
     assert!(
-        (before + OUTBOX_DEFER_MISSING_KEYS_DELAY_MS..=after + OUTBOX_DEFER_MISSING_KEYS_DELAY_MS)
-            .contains(&next_attempt),
+        (before + OUTBOX_DEFER_DELAY_MS..=after + OUTBOX_DEFER_DELAY_MS).contains(&next_attempt),
         "deferred row should be scheduled with the key-availability delay"
     );
     assert!(
@@ -2408,7 +2406,19 @@ fn lock_response(user: &str, device: &str) -> serde_json::Value {
     json!({"lease":{"holder_user_id":user,"holder_device_id":device,"expires_at":"2026-09-01T00:02:00Z"},"server_time":"2026-09-01T00:00:00Z"})
 }
 
-async fn assert_foreign_lease_blocks(user: &str, device: &str) {
+// Advance the retry schedule without sleeping or changing the queued snapshot.
+fn make_lock_retry_due(store: &crate::store::sqlite::Store) {
+    store
+        .connect()
+        .unwrap()
+        .execute(
+            "UPDATE sync_outbox SET next_attempt_epoch_ms = 0 WHERE id = 'entry:j:e'",
+            [],
+        )
+        .unwrap();
+}
+
+async fn assert_foreign_lease_waits(user: &str, device: &str) {
     let (_dir, store, profile, api) =
         lock_check_fixture(relaxed_lock_journal(), json!({"shared-journals-v2":true})).await;
     let original = store.list_outbox_item_details(true).unwrap()[0]
@@ -2420,30 +2430,286 @@ async fn assert_foreign_lease_blocks(user: &str, device: &str) {
             lock_response(user, device),
         )
         .await;
-    let err = drain_sync_outbox(&store, &api, 1, profile, &mut vec![], "outbox:post")
-        .await
-        .expect_err("another client must block the upload");
-    assert!(err.to_string().contains("entry_edit_locked"));
+    let mut resources = vec![];
+    let before = now_epoch_ms();
+    let result = drain_sync_outbox(&store, &api, 1, profile, &mut resources, "outbox:post").await;
     assert!(api.last_put_entry_content_json().await.is_none());
     let item = &store.list_outbox_item_details(true).unwrap()[0];
-    assert_eq!(item.status, "failed");
+    assert_eq!(
+        item.status, "pending",
+        "an active lease is temporary, not a failed upload"
+    );
     assert_eq!(item.payload_json, original);
+    assert_eq!(item.attempt_count, 0);
+    assert!(
+        item.next_attempt_epoch_ms > before,
+        "do not spin on an active lease"
+    );
+    assert!(
+        item.last_error
+            .as_deref()
+            .unwrap()
+            .contains("entry_edit_locked")
+    );
+    result.expect("waiting on an editor should not fail the sync");
+    assert_eq!(resources[0].status, "deferred");
+    assert_eq!(resources[0].changed_count, 0);
+    // There is no second response fixture: an immediate sync must respect the delay.
     drain_sync_outbox(&store, &api, 2, profile, &mut vec![], "outbox:post")
         .await
         .unwrap();
     assert_eq!(
-        store.list_outbox_item_details(false).unwrap()[0].status,
-        "failed"
+        store.list_outbox_item_details(true).unwrap()[0].payload_json,
+        original
     );
+    assert_eq!(
+        store.list_outbox_item_details(false).unwrap()[0].attempt_count,
+        0
+    );
+    assert!(api.last_put_entry_content_json().await.is_none());
 }
 
 #[tokio::test]
-async fn entry_lock_other_user_blocks_upload_without_retry() {
-    assert_foreign_lease_blocks("other", "other-device").await;
+async fn entry_lock_other_user_waits_without_uploading() {
+    assert_foreign_lease_waits("other", "other-device").await;
 }
+
 #[tokio::test]
-async fn entry_lock_same_user_other_device_blocks_upload_without_retry() {
-    assert_foreign_lease_blocks("owner", "other-device").await;
+async fn entry_lock_same_user_other_device_waits_without_uploading() {
+    assert_foreign_lease_waits("owner", "other-device").await;
+}
+
+#[tokio::test]
+async fn entry_lock_release_automatically_uploads_the_original_snapshot() {
+    let (_dir, store, profile, api) =
+        lock_check_fixture(relaxed_lock_journal(), json!({"shared-journals-v2":true})).await;
+    let api = api
+        .with_json_fixture(
+            "GET_JSON /shares/j/entries/e/lock",
+            lock_response("other", "device"),
+        )
+        .await
+        .with_json_fixture(
+            "GET_JSON /shares/j/entries/e/lock",
+            json!({"lease":null,"server_time":"2026-09-01T00:03:00Z"}),
+        )
+        .await;
+    let _ = drain_sync_outbox(&store, &api, 1, profile, &mut vec![], "outbox:post").await;
+    assert!(api.last_put_entry_content_json().await.is_none());
+    // A refreshed local row must not replace the saved edit or its timestamp.
+    store
+        .upsert_entry_json_row_with_edit_date(
+            "e",
+            "j",
+            Some("2026-09-07T00:00:00Z"),
+            None,
+            None,
+            r#"{"id":"e","body":"different local row"}"#,
+        )
+        .unwrap();
+    make_lock_retry_due(&store);
+    drain_sync_outbox(&store, &api, 2, profile, &mut vec![], "outbox:post")
+        .await
+        .unwrap();
+    assert_eq!(
+        api.last_put_entry_content_json()
+            .await
+            .expect("release should allow upload without manual retry")["body"],
+        "retained text"
+    );
+    assert_eq!(
+        api.last_put_entry_envelope().await.unwrap()["editDate"],
+        1712757600000_f64
+    );
+    assert!(store.list_outbox_item_details(false).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn entry_lock_wait_does_not_exhaust_upload_retries() {
+    let (_dir, store, profile, mut api) =
+        lock_check_fixture(relaxed_lock_journal(), json!({"shared-journals-v2":true})).await;
+    let original = store.list_outbox_item_details(true).unwrap()[0]
+        .payload_json
+        .clone();
+    // Lock checks must preserve attempts already spent on real upload failures.
+    store
+        .connect()
+        .unwrap()
+        .execute(
+            "UPDATE sync_outbox SET attempt_count = ?1 WHERE id = 'entry:j:e'",
+            [OUTBOX_MAX_ATTEMPTS - 1],
+        )
+        .unwrap();
+    for _ in 0..=OUTBOX_MAX_ATTEMPTS {
+        api = api
+            .with_json_fixture(
+                "GET_JSON /shares/j/entries/e/lock",
+                lock_response("other", "device"),
+            )
+            .await;
+        make_lock_retry_due(&store);
+        let _ = drain_sync_outbox(&store, &api, 1, profile, &mut vec![], "outbox:post").await;
+        let item = &store.list_outbox_item_details(true).unwrap()[0];
+        assert_eq!(item.status, "pending");
+        assert_eq!(
+            item.attempt_count,
+            OUTBOX_MAX_ATTEMPTS - 1,
+            "lock checks must not consume upload retries"
+        );
+        assert_eq!(item.payload_json, original);
+    }
+    assert!(api.last_put_entry_content_json().await.is_none());
+    let api = api
+        .with_json_fixture(
+            "GET_JSON /shares/j/entries/e/lock",
+            json!({"lease":null,"server_time":"2026-09-01T00:03:00Z"}),
+        )
+        .await;
+    make_lock_retry_due(&store);
+    drain_sync_outbox(&store, &api, 2, profile, &mut vec![], "outbox:post")
+        .await
+        .unwrap();
+    assert!(store.list_outbox_item_details(false).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn entry_lock_wait_allows_later_uploads_and_reports_their_errors() {
+    for (journal_id, outcome) in [("personal", "clean"), ("j", "clean"), ("personal", "dirty")] {
+        let (_dir, store, profile, api) =
+            lock_check_fixture(relaxed_lock_journal(), json!({"shared-journals-v2":true})).await;
+        if journal_id == "personal" {
+            store.upsert_json_row("journals", journal_id, None, None,
+                r#"{"id":"personal","is_shared":false,"shared_permissions":"any_participant_full"}"#).unwrap();
+        }
+        let payload = json!({"journal_id":journal_id,"entry_id":"other","entry_json":{"id":"other","body":"unrelated edit","date":1712757600000_i64,"moments":[],"tags":[]},"queued_at_epoch_ms":1712757600000_i64});
+        store
+            .enqueue_outbox_item(
+                &format!("entry:{journal_id}:other"),
+                "entry",
+                "update",
+                &format!("{journal_id}:other"),
+                &payload.to_string(),
+                1,
+            )
+            .unwrap();
+        let mut api = api
+            .with_json_fixture(
+                "GET_JSON /shares/j/entries/e/lock",
+                lock_response("other", "device"),
+            )
+            .await
+            .with_bytes_fixture(
+                format!("PUT_ENTRY_MULTIPART /v3/sync/entries/{journal_id}/other"),
+                serde_json::to_vec(
+                    &json!({"outcome":outcome,"revision":{"entryId":"other","type":"update"}}),
+                )
+                .unwrap(),
+            )
+            .await;
+        if journal_id == "j" {
+            api = api
+                .with_json_fixture(
+                    "GET_JSON /shares/j/entries/other/lock",
+                    json!({"lease":null,"server_time":"2026-09-01T00:00:00Z"}),
+                )
+                .await;
+        }
+        let mut resources = vec![];
+        let result =
+            drain_sync_outbox(&store, &api, 1, profile, &mut resources, "outbox:post").await;
+        assert_eq!(
+            api.last_put_entry_content_json()
+                .await
+                .expect("a locked entry must not stop unrelated uploads")["body"],
+            "unrelated edit"
+        );
+        if outcome == "dirty" {
+            let err = result.expect_err("a deferred lock must not hide a later conflict");
+            assert!(
+                err.to_string().contains("outcome=dirty"),
+                "wrong error: {err}"
+            );
+            assert_eq!(resources[0].status, "error");
+            assert!(
+                resources[0]
+                    .error
+                    .as_deref()
+                    .unwrap()
+                    .contains("outcome=dirty")
+            );
+            let items = store.list_outbox_item_details(false).unwrap();
+            assert_eq!(
+                items.iter().find(|i| i.id == "entry:j:e").unwrap().status,
+                "pending"
+            );
+            assert_eq!(
+                items
+                    .iter()
+                    .find(|i| i.object_id == "personal:other")
+                    .unwrap()
+                    .status,
+                "failed"
+            );
+            continue;
+        }
+        result.unwrap();
+        let remaining = store.list_outbox_item_details(false).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, "entry:j:e");
+        assert_eq!(remaining[0].status, "pending");
+        assert_eq!(resources[0].status, "deferred");
+        assert_eq!(resources[0].changed_count, 1);
+    }
+}
+
+#[tokio::test]
+async fn entry_lock_release_then_server_conflict_requires_explicit_recovery() {
+    let (_dir, store, profile, _) =
+        lock_check_fixture(relaxed_lock_journal(), json!({"shared-journals-v2":true})).await;
+    let original = store.list_outbox_item_details(true).unwrap()[0]
+        .payload_json
+        .clone();
+    let api = crate::http::fake::FakeApiClient::new()
+        .with_json_fixture(
+            "GET_JSON /shares/j/entries/e/lock",
+            lock_response("other", "device"),
+        )
+        .await
+        .with_json_fixture(
+            "GET_JSON /shares/j/entries/e/lock",
+            json!({"lease":null,"server_time":"2026-09-01T00:03:00Z"}),
+        )
+        .await
+        .with_bytes_fixture(
+            "PUT_ENTRY_MULTIPART /v3/sync/entries/j/e",
+            serde_json::to_vec(
+                &json!({"outcome":"dirty","revision":{"entryId":"e","type":"update"}}),
+            )
+            .unwrap(),
+        )
+        .await;
+    let _ = drain_sync_outbox(&store, &api, 1, profile, &mut vec![], "outbox:post").await;
+    make_lock_retry_due(&store);
+    let err = drain_sync_outbox(&store, &api, 2, profile, &mut vec![], "outbox:post")
+        .await
+        .expect_err("server conflict must require recovery");
+    assert!(err.to_string().contains("outcome=dirty"));
+    assert_eq!(
+        api.last_put_entry_content_json().await.unwrap()["body"],
+        "retained text"
+    );
+    let item = &store.list_outbox_item_details(true).unwrap()[0];
+    assert_eq!(item.status, "failed");
+    assert_eq!(item.payload_json, original);
+    let unused_api = crate::http::fake::FakeApiClient::new();
+    drain_sync_outbox(&store, &unused_api, 3, profile, &mut vec![], "outbox:post")
+        .await
+        .unwrap();
+    assert!(unused_api.last_put_entry_content_json().await.is_none());
+    assert_eq!(
+        store.list_outbox_item_details(true).unwrap()[0].payload_json,
+        original
+    );
 }
 
 #[tokio::test]
@@ -2523,7 +2789,15 @@ async fn entry_lock_malformed_status_is_retryable() {
 async fn entry_lock_gate_skips_personal_strict_and_disabled_journals() {
     for (journal, flags) in [
         (
-            json!({"id":"j","is_shared":false}),
+            json!({"id":"j","is_shared":false,"shared_permissions":"any_participant_full"}),
+            json!({"shared-journals-v2":true}),
+        ),
+        (
+            json!({"id":"j","is_shared":0,"shared_permissions":"any_participant_full"}),
+            json!({"shared-journals-v2":true}),
+        ),
+        (
+            json!({"id":"j","shared_permissions":"any_participant_full"}),
             json!({"shared-journals-v2":true}),
         ),
         (
@@ -2542,17 +2816,22 @@ async fn entry_lock_gate_skips_personal_strict_and_disabled_journals() {
 }
 
 #[tokio::test]
-async fn entry_lock_failed_payload_survives_entry_and_journal_removal() {
+async fn entry_conflict_failed_payload_survives_entry_and_journal_removal() {
     for remove_journal in [true, false] {
-        let (_dir, store, profile, api) =
+        let (_dir, store, profile, _) =
             lock_check_fixture(relaxed_lock_journal(), json!({"shared-journals-v2":true})).await;
         let original = store.list_outbox_item_details(true).unwrap()[0]
             .payload_json
             .clone();
-        let api = api
+        let api = crate::http::fake::FakeApiClient::new()
             .with_json_fixture(
                 "GET_JSON /shares/j/entries/e/lock",
-                lock_response("other", "other-device"),
+                json!({"lease":null,"server_time":"2026-09-01T00:00:00Z"}),
+            )
+            .await
+            .with_bytes_fixture(
+                "PUT_ENTRY_MULTIPART /v3/sync/entries/j/e",
+                serde_json::to_vec(&json!({"outcome":"dirty"})).unwrap(),
             )
             .await;
         assert!(

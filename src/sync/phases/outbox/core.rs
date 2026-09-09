@@ -13,6 +13,7 @@ pub(crate) async fn drain_sync_outbox<C: DayOneApiClient>(
     let mut changed_count = 0_i64;
     let mut status = "success".to_owned();
     let mut error: Option<String> = None;
+    let mut deferred_reason: Option<String> = None;
     let mut fatal_error: Option<String> = None;
 
     loop {
@@ -90,11 +91,12 @@ pub(crate) async fn drain_sync_outbox<C: DayOneApiClient>(
                 }
                 Err(err) => {
                     let err_text = err.to_string();
-                    let should_defer = should_defer_outbox_item_until_keys(&item, &err);
+                    let waiting_for_lock = matches!(&err, OutboxProcessError::EntryEditLocked);
+                    let should_defer =
+                        waiting_for_lock || should_defer_outbox_item_until_keys(&item, &err);
                     if should_defer {
                         let defer_attempt = item.attempt_count;
-                        let defer_ms =
-                            now_epoch_ms().saturating_add(OUTBOX_DEFER_MISSING_KEYS_DELAY_MS);
+                        let defer_ms = now_epoch_ms().saturating_add(OUTBOX_DEFER_DELAY_MS);
                         if let Err(db_err) = store.mark_outbox_item_deferred(
                             &item.id,
                             &item.payload_json,
@@ -134,13 +136,16 @@ pub(crate) async fn drain_sync_outbox<C: DayOneApiClient>(
                             Some(&err),
                         );
                         status = "deferred".to_owned();
-                        if error.is_none() {
-                            error = Some(err_text.clone());
+                        if deferred_reason.is_none() {
+                            deferred_reason = Some(err_text.clone());
                         }
                         log_sync(format!(
                             "outbox item deferred id={} attempt={} err={}",
                             item.id, defer_attempt, err_text
                         ));
+                        if waiting_for_lock {
+                            continue;
+                        }
                         stop_processing = true;
                         break;
                     }
@@ -193,7 +198,7 @@ pub(crate) async fn drain_sync_outbox<C: DayOneApiClient>(
                             stop_processing = true;
                             break;
                         }
-                        OutboxProcessError::Retryable(_) => {}
+                        OutboxProcessError::Retryable(_) | OutboxProcessError::EntryEditLocked => {}
                     }
 
                     let next_attempt = item.attempt_count + 1;
@@ -284,6 +289,7 @@ pub(crate) async fn drain_sync_outbox<C: DayOneApiClient>(
     }
 
     let finished = now_epoch_ms();
+    let error = error.or(deferred_reason);
     resources.push(ResourceSyncOutput {
         resource: resource_name.to_owned(),
         started_at_epoch_ms: started,

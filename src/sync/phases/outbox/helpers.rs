@@ -320,7 +320,7 @@ pub(crate) fn should_defer_outbox_item_until_keys(
     }
     match err {
         OutboxProcessError::Retryable(inner) => is_key_availability_error(inner),
-        OutboxProcessError::NonRetryable { .. } => false,
+        OutboxProcessError::NonRetryable { .. } | OutboxProcessError::EntryEditLocked => false,
     }
 }
 
