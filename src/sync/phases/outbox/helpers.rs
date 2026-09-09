@@ -320,7 +320,7 @@ pub(crate) fn should_defer_outbox_item_until_keys(
     }
     match err {
         OutboxProcessError::Retryable(inner) => is_key_availability_error(inner),
-        OutboxProcessError::NonRetryable { .. } => false,
+        OutboxProcessError::NonRetryable { .. } | OutboxProcessError::EntryEditLocked => false,
     }
 }
 
@@ -543,23 +543,30 @@ pub(crate) fn resolve_outbox_edit_date_epoch_ms(
     {
         return datetime_to_epoch_ms(dt);
     }
+    queued_entry_edit_date_epoch_ms(payload, entry_content).unwrap_or_else(now_epoch_ms)
+}
+
+pub(crate) fn queued_entry_edit_date_epoch_ms(
+    payload: &EntryOutboxPayload,
+    entry_content: &Entry,
+) -> Option<i64> {
     if let Some(ms) = payload.edit_date_epoch_ms {
-        return ms;
+        return Some(ms);
     }
     if let Some(ms) = payload.queued_at_epoch_ms {
-        return ms;
+        return Some(ms);
     }
     if let Some(ms) = entry_content
         .user_edit_date
         .as_ref()
         .and_then(Value::as_i64)
     {
-        return ms;
+        return Some(ms);
     }
     if let Some(queued_at) = payload.queued_at.as_deref()
         && let Ok(dt) = OffsetDateTime::parse(queued_at, &Rfc3339)
     {
-        return datetime_to_epoch_ms(dt);
+        return Some(datetime_to_epoch_ms(dt));
     }
     if let Some(user_edit_date) = entry_content
         .user_edit_date
@@ -567,9 +574,9 @@ pub(crate) fn resolve_outbox_edit_date_epoch_ms(
         .and_then(Value::as_str)
         && let Ok(dt) = OffsetDateTime::parse(user_edit_date, &Rfc3339)
     {
-        return datetime_to_epoch_ms(dt);
+        return Some(datetime_to_epoch_ms(dt));
     }
-    now_epoch_ms()
+    None
 }
 
 #[cfg(test)]

@@ -19,14 +19,18 @@ use crate::sync::crypto::{
     journal_is_e2e_encrypted,
 };
 use crate::sync::engine::{
-    OUTBOX_BATCH_SIZE, OUTBOX_DEFER_MISSING_KEYS_DELAY_MS, OUTBOX_MAX_ATTEMPTS, ResourceSyncOutput,
-    log_sync, now_epoch_ms,
+    OUTBOX_BATCH_SIZE, OUTBOX_DEFER_DELAY_MS, OUTBOX_MAX_ATTEMPTS, ResourceSyncOutput, log_sync,
+    now_epoch_ms,
 };
 use crate::sync::phases::pull::crypto::{build_journal_decryptor, try_decrypt_journal_fields};
 use crate::util::encode_path_segment;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum OutboxProcessError {
+    #[error(
+        "entry_edit_locked: another client holds the edit lock; the upload is queued and will be checked again on a later sync"
+    )]
+    EntryEditLocked,
     #[error("{reason}")]
     NonRetryable { reason: String },
     #[error("{0}")]
@@ -103,7 +107,7 @@ pub(crate) use helpers::{
     decode_daily_chat_settings_outbox_payload, decode_entry_outbox_payload,
     decode_journal_create_outbox_payload, decode_original_media_outbox_payload,
     entry_date_value_to_f64, mark_retry_or_failed, normalize_entry_content_for_push,
-    parse_entry_put_response_bytes, push_original_media_outbox, reset_current_outbox_lease,
-    resolve_outbox_edit_date_epoch_ms, resolve_sync_upload_base_url, retry_delay_ms,
-    should_defer_outbox_item_until_keys, value_to_string,
+    parse_entry_put_response_bytes, push_original_media_outbox, queued_entry_edit_date_epoch_ms,
+    reset_current_outbox_lease, resolve_outbox_edit_date_epoch_ms, resolve_sync_upload_base_url,
+    retry_delay_ms, should_defer_outbox_item_until_keys, value_to_string,
 };

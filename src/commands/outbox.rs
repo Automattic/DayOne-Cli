@@ -51,6 +51,28 @@ pub fn list(store: &Store, base_url: &str, include_payload: bool) -> Result<Outb
 }
 
 #[derive(Debug, Serialize)]
+pub struct OutboxRetryOutput {
+    pub ok: bool,
+    pub base_url: String,
+    pub id: String,
+    pub queued: bool,
+    pub synced: bool,
+}
+
+pub fn retry(store: &Store, base_url: &str, id: &str) -> Result<OutboxRetryOutput> {
+    if !store.retry_failed_outbox_item(id)? {
+        bail!("outbox item is missing or not failed; inspect dayone outbox list");
+    }
+    Ok(OutboxRetryOutput {
+        ok: true,
+        base_url: base_url.to_owned(),
+        id: id.to_owned(),
+        queued: true,
+        synced: false,
+    })
+}
+
+#[derive(Debug, Serialize)]
 pub struct OutboxClearOutput {
     pub ok: bool,
     pub base_url: String,
@@ -264,5 +286,49 @@ mod tests {
         )
         .expect_err("clear without selector should fail");
         assert!(err.to_string().contains("specify what to clear"));
+    }
+    #[test]
+    fn retry_preserves_the_original_payload_and_requeues_only_the_failed_item() {
+        let store = setup_store();
+        let payload = r#"{"journal_id":"journal-1","entry_id":"entry-2","entry_json":{"body":"preserved","userEditDate":123},"queued_at_epoch_ms":123}"#;
+        store
+            .connect()
+            .unwrap()
+            .execute(
+                "UPDATE sync_outbox SET payload_json = ?1 WHERE id = 'entry:journal-1:entry-2'",
+                [payload],
+            )
+            .unwrap();
+        let output = retry(&store, "https://stg.dayone.me", "entry:journal-1:entry-2").unwrap();
+        assert!(output.queued);
+        assert!(!output.synced);
+        let items = store.list_outbox_item_details(true).unwrap();
+        let item = items.iter().find(|item| item.id == output.id).unwrap();
+        assert_eq!(item.payload_json.as_deref(), Some(payload));
+        assert_eq!(item.status, "pending");
+        assert_eq!(item.attempt_count, 0);
+        assert_eq!(item.next_attempt_epoch_ms, 0);
+        assert!(
+            item.last_error.is_some(),
+            "retain the failure until the upload settles"
+        );
+        assert_eq!(items.len(), 2);
+        assert!(retry(&store, "https://stg.dayone.me", &output.id).is_err());
+    }
+
+    #[test]
+    fn retry_rejects_missing_pending_and_processing_items() {
+        let store = setup_store();
+        assert!(retry(&store, "https://stg.dayone.me", "missing").is_err());
+        assert!(retry(&store, "https://stg.dayone.me", "entry:journal-1:entry-1").is_err());
+        store.lease_outbox_items(i64::MAX, 1).unwrap();
+        assert!(retry(&store, "https://stg.dayone.me", "entry:journal-1:entry-1").is_err());
+        assert!(
+            store
+                .list_outbox_item_details(false)
+                .unwrap()
+                .iter()
+                .any(|row| row.id == "entry:journal-1:entry-1" && row.status == "processing")
+        );
     }
 }

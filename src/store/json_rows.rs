@@ -341,8 +341,10 @@ impl Store {
         tx.execute(
             r#"
             DELETE FROM sync_outbox
-            WHERE (resource = 'journal' AND object_id = ?1)
-               OR (resource IN ('entry', 'original_media', 'comment') AND instr(object_id, ?1 || ':') = 1)
+            WHERE status != 'failed' AND last_error IS NULL AND (
+              (resource = 'journal' AND object_id = ?1)
+              OR (resource IN ('entry', 'original_media', 'comment') AND instr(object_id, ?1 || ':') = 1)
+            )
             "#,
             params![journal_id],
         )?;
@@ -388,8 +390,10 @@ impl Store {
         tx.execute(
             r#"
             DELETE FROM sync_outbox
-            WHERE (resource = 'entry' AND object_id = ?1)
-               OR (resource IN ('original_media', 'comment') AND instr(object_id, ?1 || ':') = 1)
+            WHERE status != 'failed' AND last_error IS NULL AND (
+              (resource = 'entry' AND object_id = ?1)
+              OR (resource IN ('original_media', 'comment') AND instr(object_id, ?1 || ':') = 1)
+            )
             "#,
             params![format!("{journal_id}:{entry_id}")],
         )?;

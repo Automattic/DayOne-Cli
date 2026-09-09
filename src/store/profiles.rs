@@ -240,6 +240,22 @@ impl Store {
         Ok(())
     }
 
+    pub(crate) fn auth_user_id_for_profile(&self, profile_id: i64) -> StoreResult<String> {
+        let conn = self.connect()?;
+        let json: Option<String> = conn
+            .query_row(
+                "SELECT user_json FROM auth_sessions WHERE profile_id = ?1",
+                params![profile_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        json.as_deref()
+            .map(user_id_from_session_json)
+            .transpose()?
+            .flatten()
+            .ok_or(StoreError::InvalidAuthSessionUserId { profile_id })
+    }
+
     /// Per-profile stores use their active profile's session so a runtime API
     /// host override does not change credential identity. Legacy shared stores
     /// retain exact-URL lookup.

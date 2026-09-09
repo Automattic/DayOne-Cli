@@ -13,6 +13,16 @@ pub mod fake;
 
 pub use device_info::DeviceInfo;
 
+use crate::util::encode_path_segment;
+
+pub(crate) fn entry_edit_lock_path(journal_id: &str, entry_id: &str) -> String {
+    format!(
+        "/shares/{}/entries/{}/lock",
+        encode_path_segment(journal_id),
+        encode_path_segment(entry_id)
+    )
+}
+
 #[derive(Clone, Debug)]
 pub struct MultipartBinaryPart {
     pub name: String,
@@ -33,6 +43,11 @@ pub trait DayOneApiClient: Send + Sync {
     async fn put_json(&self, api_path: &str, payload: &Value) -> Result<Value>;
     async fn post_json(&self, api_path: &str, payload: &Value) -> Result<Value>;
     async fn delete_json(&self, api_path: &str, query: &[(&str, String)]) -> Result<Value>;
+
+    async fn get_entry_edit_lock(&self, journal_id: &str, entry_id: &str) -> Result<Value> {
+        self.get_json(&entry_edit_lock_path(journal_id, entry_id), &[])
+            .await
+    }
 
     async fn put_entry_multipart(
         &self,
