@@ -1,6 +1,6 @@
 //! Analytics identity resolution.
 //!
-//! CLI telemetry is intentionally anonymous. Unlike Day One Web (which switches
+//! CLI telemetry uses a pseudonymous installation identity. Unlike Day One Web (which switches
 //! the Tracks identity to `_ut = dayone:user_id` once signed in), every event
 //! is attributed to a stable install-level anonymous id (`_ut = anon`) — before
 //! *and* after sign-in. The Day One user id is never used as the Tracks

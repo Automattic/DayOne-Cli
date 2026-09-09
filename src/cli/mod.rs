@@ -42,6 +42,8 @@ enum TopLevelCommand {
     Auth(AuthCommand),
     UserSettings(UserSettingsCommand),
     Profile(ProfileCommand),
+    /// Manage optional usage analytics and error reporting. No network access.
+    Telemetry(TelemetryCommand),
     Journal(JournalCommand),
     Entry(EntryCommand),
     Embeddings(EmbeddingsCommand),
@@ -61,6 +63,22 @@ enum TopLevelCommand {
     Tui,
     /// Report environment and known local-state problems without modifying user data.
     Doctor(DoctorCliArgs),
+}
+
+#[derive(Debug, Args)]
+struct TelemetryCommand {
+    #[command(subcommand)]
+    command: TelemetrySubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum TelemetrySubcommand {
+    /// Agree to the telemetry disclosure and enable optional reporting.
+    Enable,
+    /// Withdraw consent for analytics and error reporting.
+    Disable,
+    /// Show the saved choice and environment override without collecting data.
+    Status,
 }
 
 #[derive(Debug, Args)]
@@ -796,7 +814,7 @@ struct WhoAmIOutput {
     user: Value,
 }
 
-pub async fn run() -> Result<()> {
+pub async fn run(telemetry: &mut crate::telemetry::TelemetryGuard) -> Result<()> {
     let cli = Cli::parse();
     let command_name = top_level_command_name(&cli.command);
     let subcommand = subcommand_label(&cli.command);
@@ -853,12 +871,30 @@ pub async fn run() -> Result<()> {
             return Err(error.into());
         }
     };
-    config.show_telemetry_notice_once(&config_dir);
+    if let TopLevelCommand::Telemetry(cmd) = cli.command {
+        use crate::config::ConsentState;
+        match cmd.command {
+            TelemetrySubcommand::Enable => {
+                crate::consent::print_disclosure(&mut std::io::stderr())?;
+                crate::consent::save_decision(&mut config, &config_dir, ConsentState::Granted)?;
+            }
+            TelemetrySubcommand::Disable => {
+                crate::consent::save_decision(&mut config, &config_dir, ConsentState::Denied)?;
+            }
+            TelemetrySubcommand::Status => {}
+        }
+        return print_json(&serde_json::json!({
+            "ok": true,
+            "consent": config.analytics.consent,
+            "consent_version": config.analytics.consent_version,
+            "consent_recorded_at_ms": config.analytics.consent_recorded_at_ms,
+            "permitted": config.analytics.consent_granted() && crate::telemetry::is_enabled(),
+            "disabled_by_environment": !crate::telemetry::is_enabled(),
+        }));
+    }
 
-    // Tag the profile before any subcommand dispatch so that errors raised
-    // by `profile list` / `profile set` (which take the early-return path
-    // below) are also attributed to the right profile in telemetry events.
-    // Cloned so `config` can be borrowed mutably below (analytics init).
+    // Profile commands remain local and do not initialize telemetry. Clone the
+    // name so configuration can be updated during consent and analytics setup.
     let profile_name = cli
         .profile
         .clone()
@@ -940,6 +976,18 @@ pub async fn run() -> Result<()> {
         }
     };
 
+    if crate::analytics::would_collect(&store, &base_url) || crate::telemetry::would_collect() {
+        crate::consent::resolve(&mut config, &config_dir);
+    }
+    // Main retains the guard until after error reporting. No Sentry client
+    // exists during argument parsing, configuration, or consent failures.
+    *telemetry = crate::telemetry::init(&config, &config_dir);
+    crate::telemetry::set_command(command_name);
+    crate::telemetry::set_profile(&profile_name);
+    if let Some(id) = diagnostic_invocation_id.as_deref() {
+        crate::telemetry::set_diagnostic_invocation_id(id);
+    }
+
     // Initialise analytics (anonymous id, identity, opt-out gate) before
     // dispatch so handlers can record domain events.
     crate::analytics::init(&config_dir, &mut config, &store, &base_url);
@@ -972,7 +1020,9 @@ async fn dispatch_command(
         TopLevelCommand::Setup => dispatch_setup(base_url, store).await?,
         TopLevelCommand::Auth(cmd) => dispatch_auth(base_url, cmd, store).await?,
         TopLevelCommand::UserSettings(cmd) => dispatch_user_settings(base_url, cmd, store).await?,
-        TopLevelCommand::Profile(_) => unreachable!("handled before dispatch"),
+        TopLevelCommand::Profile(_) | TopLevelCommand::Telemetry(_) => {
+            unreachable!("handled before dispatch")
+        }
         TopLevelCommand::Journal(cmd) => dispatch_journal(base_url, cmd, store).await?,
         TopLevelCommand::Entry(cmd) => dispatch_entry(base_url, cmd, store).await?,
         TopLevelCommand::Embeddings(cmd) => dispatch_embeddings(cmd, store)?,
@@ -1081,7 +1131,7 @@ fn dispatch_profile(
             print_json(&output)?;
         }
         ProfileSubcommand::Set(args) => {
-            let output = profile::set(config_dir, config, &args.profile, args.api_host.as_deref())?;
+            let output = profile::set(config_dir, &args.profile, args.api_host.as_deref())?;
             print_json(&output)?;
         }
     }
@@ -1659,6 +1709,7 @@ fn top_level_command_name(command: &TopLevelCommand) -> &'static str {
         TopLevelCommand::Auth(_) => "auth",
         TopLevelCommand::UserSettings(_) => "user-settings",
         TopLevelCommand::Profile(_) => "profile",
+        TopLevelCommand::Telemetry(_) => "telemetry",
         TopLevelCommand::Journal(_) => "journal",
         TopLevelCommand::Entry(_) => "entry",
         TopLevelCommand::Embeddings(_) => "embeddings",
@@ -1686,6 +1737,11 @@ fn subcommand_label(command: &TopLevelCommand) -> Option<&'static str> {
             AuthSubcommand::Logout(_) => "logout",
             AuthSubcommand::KeySet(_) => "key-set",
             AuthSubcommand::Whoami => "whoami",
+        }),
+        TopLevelCommand::Telemetry(cmd) => Some(match cmd.command {
+            TelemetrySubcommand::Enable => "enable",
+            TelemetrySubcommand::Disable => "disable",
+            TelemetrySubcommand::Status => "status",
         }),
         TopLevelCommand::UserSettings(cmd) => Some(match cmd.command {
             UserSettingsSubcommand::Get => "get",
