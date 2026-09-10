@@ -30,7 +30,6 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use futures_util::future::join_all;
 use serde_json::{Map, Value, json};
 
 use crate::config::AppConfig;
@@ -79,16 +78,8 @@ static STATE: OnceLock<State> = OnceLock::new();
 /// derive the sign-in flag and subscription tier from any stored session.
 pub fn init(config_dir: &Path, config: &mut AppConfig, store: &Store, base_url: &str) {
     // Do not create an identifier or queue events until every collection gate
-    // permits it. Consent also excludes events queued by pre-consent releases.
+    // permits it. Queued identities are checked again before transmission.
     if !would_collect(store, base_url) || !config.analytics.consent_granted() {
-        return;
-    }
-    let cutoff = config
-        .analytics
-        .consent_recorded_at_ms
-        .unwrap()
-        .saturating_add(1);
-    if store.prune_analytics_events_older_than(cutoff).is_err() {
         return;
     }
     let recorded_at_ms = config.analytics.consent_recorded_at_ms.unwrap();
@@ -323,18 +314,14 @@ pub async fn flush(store: &Store) {
     let Ok(sender) = TracksSender::new() else {
         return;
     };
-    let (user_ref, user_type) = {
+    let (anon_id, _) = {
         let identity = match state.identity.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
         identity.tracks_pair()
     };
-    let _ = tokio::time::timeout(
-        FLUSH_BUDGET,
-        drain_queue(store, &sender, &user_ref, user_type),
-    )
-    .await;
+    let _ = tokio::time::timeout(FLUSH_BUDGET, drain_queue(store, &sender, &anon_id)).await;
 }
 
 /// Returns the global state only when analytics is enabled.
@@ -411,72 +398,51 @@ fn build_params(
     params
 }
 
-struct PendingBatch {
-    tracks_ui: String,
-    tracks_ut: String,
-    events: Vec<Value>,
-    rows: Vec<(i64, i64)>,
-}
-
-/// Core send routine, parameterised over the sender so it can be unit-tested
-/// without the network. Events are grouped by their enqueue-time anonymous
-/// identity; rows without a (still-valid, anonymous) identity — including
-/// legacy rows stamped with a `dayone:user_id` from an older client — fall back
-/// to the current anonymous identity, so nothing is ever sent tied to the
-/// account.
-async fn drain_queue<S: EventSender>(store: &Store, sender: &S, user_ref: &str, user_type: &str) {
+/// Send only events recorded under the current anonymous identity. A new
+/// consent decision resets that identity, so clock corrections cannot make
+/// an old event eligible or assign it to the new consent decision.
+async fn drain_queue<S: EventSender>(store: &Store, sender: &S, anon_id: &str) {
     let cutoff = crate::util::now_epoch_ms().saturating_sub(RETENTION_MS);
-    let _ = store.prune_analytics_events_older_than(cutoff);
+    if store
+        .prune_analytics_events(cutoff, anon_id, identity::USER_ID_TYPE_ANON)
+        .is_err()
+    {
+        return;
+    }
 
     let rows = match store.take_analytics_events(MAX_FLUSH_PER_RUN) {
         Ok(rows) => rows,
         Err(_) => return,
     };
 
-    let mut batches: Vec<PendingBatch> = Vec::new();
-    // Unparseable rows are dropped so they never wedge the queue.
-    let mut to_delete: Vec<i64> = Vec::new();
+    let mut events = Vec::new();
+    let mut pending = Vec::new();
+    let mut to_delete = Vec::new();
     for row in rows {
+        // An older process can enqueue after pruning. Recheck the identity
+        // before sending; never adopt records from a different consent decision.
+        if row.tracks_ui.as_deref() != Some(anon_id)
+            || row.tracks_ut.as_deref() != Some(identity::USER_ID_TYPE_ANON)
+        {
+            to_delete.push(row.id);
+            continue;
+        }
         match build_event_object(&row.params_json, row.created_at_ms) {
             Some(event) => {
-                let (tracks_ui, tracks_ut) =
-                    queued_identity(&row.tracks_ui, &row.tracks_ut, user_ref, user_type);
-                let batch = batches
-                    .iter_mut()
-                    .find(|batch| batch.tracks_ui == tracks_ui && batch.tracks_ut == tracks_ut);
-                if let Some(batch) = batch {
-                    batch.events.push(event);
-                    batch.rows.push((row.id, row.attempts));
-                } else {
-                    batches.push(PendingBatch {
-                        tracks_ui,
-                        tracks_ut,
-                        events: vec![event],
-                        rows: vec![(row.id, row.attempts)],
-                    });
-                }
+                events.push(event);
+                pending.push((row.id, row.attempts));
             }
             None => to_delete.push(row.id),
         }
     }
-    if batches.is_empty() {
-        let _ = store.delete_analytics_events(&to_delete);
-        return;
-    }
 
-    let mut to_bump: Vec<i64> = Vec::new();
-    let results = join_all(batches.into_iter().map(|batch| async move {
-        let body = build_batch_body(&batch.tracks_ui, &batch.tracks_ut, batch.events);
-        (batch.rows, sender.send(&body).await)
-    }))
-    .await;
-    for (pending, result) in results {
-        match result {
+    let mut to_bump = Vec::new();
+    if !events.is_empty() {
+        let body = build_batch_body(anon_id, identity::USER_ID_TYPE_ANON, events);
+        match sender.send(&body).await {
             Ok(()) => to_delete.extend(pending.into_iter().map(|(id, _)| id)),
             Err(_) => {
                 for (id, attempts) in pending {
-                    // Drop rows that have exhausted their retries; otherwise
-                    // bump their attempt count so they age out eventually.
                     if attempts + 1 >= MAX_SEND_ATTEMPTS {
                         to_delete.push(id);
                     } else {
@@ -486,26 +452,9 @@ async fn drain_queue<S: EventSender>(store: &Store, sender: &S, user_ref: &str, 
             }
         }
     }
-    // Apply all cleanup with at most one bulk delete and one bulk update,
-    // instead of opening a fresh SQLite connection per row.
+    // Stale and malformed records are removed even if nothing can be sent.
     let _ = store.delete_analytics_events(&to_delete);
     let _ = store.bump_analytics_event_attempts(&to_bump);
-}
-
-fn queued_identity(
-    tracks_ui: &Option<String>,
-    tracks_ut: &Option<String>,
-    fallback_ui: &str,
-    fallback_ut: &str,
-) -> (String, String) {
-    match (tracks_ui.as_deref(), tracks_ut.as_deref()) {
-        (Some(ui), Some(identity::USER_ID_TYPE_ANON)) if identity::is_valid_anonymous_id(ui) => {
-            (ui.to_owned(), identity::USER_ID_TYPE_ANON.to_owned())
-        }
-        // Anything else — no identity, or a legacy `dayone:user_id` row from an
-        // older client — is anonymized to the current fallback identity.
-        _ => (fallback_ui.to_owned(), fallback_ut.to_owned()),
-    }
 }
 
 /// Turn a stored event into a Tracks `events[]` entry: the event's stored

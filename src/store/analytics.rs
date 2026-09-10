@@ -133,13 +133,19 @@ impl Store {
         Ok(())
     }
 
-    /// Drop events created before `cutoff_ms`. Called before a flush so
-    /// long-stale events never accumulate when sending keeps failing.
-    pub(crate) fn prune_analytics_events_older_than(&self, cutoff_ms: i64) -> StoreResult<()> {
+    /// Remove expired events and records outside the current consent identity
+    /// before the flush limit is applied. IS NOT also matches missing identities.
+    pub(crate) fn prune_analytics_events(
+        &self,
+        cutoff_ms: i64,
+        tracks_ui: &str,
+        tracks_ut: &str,
+    ) -> StoreResult<()> {
         let conn = self.connect()?;
         conn.execute(
-            "DELETE FROM analytics_events WHERE created_at_ms < ?1",
-            params![cutoff_ms],
+            "DELETE FROM analytics_events WHERE created_at_ms < ?1
+             OR tracks_ui IS NOT ?2 OR tracks_ut IS NOT ?3",
+            params![cutoff_ms, tracks_ui, tracks_ut],
         )?;
         Ok(())
     }
