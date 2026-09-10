@@ -40,4 +40,10 @@ The CLI removes Sentry user and server-name fields and HTTP response bodies. It 
 
 Both services receive the source IP address used for the request.
 
+## Data retention
+
+- **Access logs:** Standard server logs, including source IP addresses, are retained for 30 days.
+- **Usage analytics:** We aim to delete personal data derived from Tracks events after 36 months (1,096 days). Warehouse backup copies can remain for up to 180 days after the backup was created.
+- **Error reports:** Sentry retains individual error events for 90 days. Its backups are deleted 90 days after backup creation.
+
 For questions, contact [Day One Support](https://dayone.me/support). Do not include journal content, credentials, or your profile database in a support request.
