@@ -342,13 +342,13 @@ async fn drain_queue_scrubs_disallowed_properties_before_sending() {
             "dayone_cli_command_run",
             r#"{"_en":"dayone_cli_command_run","is_signed_in":true,"device_info_app_version":"0.1.0","device_info_os":"macos aarch64","command":"sync","outcome":"success","duration_ms":2,"body":"private journal body"}"#,
             crate::util::now_epoch_ms(),
-            None,
-            None,
+            Some("AAECAwQFBgcICQoLDA0ODxAR"),
+            Some("anon"),
         )
         .expect("enqueue");
     let sender = StubSender::new(false);
 
-    drain_queue(&store, &sender, "AAECAwQFBgcICQoLDA0ODxAR", "anon").await;
+    drain_queue(&store, &sender, "AAECAwQFBgcICQoLDA0ODxAR").await;
 
     let sent = sender.sent();
     let event = &sent[0]["events"][0];
@@ -366,14 +366,14 @@ async fn drain_queue_deletes_sent_events() {
             "dayone_cli_entry_create",
             r#"{"_en":"dayone_cli_entry_create","is_signed_in":true,"device_info_app_version":"0.1.0","device_info_os":"macos aarch64"}"#,
             created_at,
-            None,
-            None,
+            Some("AAECAwQFBgcICQoLDA0ODxAR"),
+            Some("anon"),
         )
         .expect("enqueue");
     let sender = StubSender::new(false);
     let anon_id = "AAECAwQFBgcICQoLDA0ODxAR";
 
-    drain_queue(&store, &sender, anon_id, "anon").await;
+    drain_queue(&store, &sender, anon_id).await;
 
     assert_eq!(sender.sent().len(), 1, "one batch should have been sent");
     let body = &sender.sent()[0];
@@ -399,14 +399,14 @@ async fn drain_queue_sends_all_events_in_one_batch() {
                 name,
                 &format!(r#"{{"_en":"{name}","is_signed_in":false,"device_info_app_version":"0.1.0","device_info_os":"linux x86_64"}}"#),
                 created_at,
-                None,
-                None,
+                Some("AAECAwQFBgcICQoLDA0ODxAR"),
+                Some("anon"),
             )
             .expect("enqueue");
     }
     let sender = StubSender::new(false);
 
-    drain_queue(&store, &sender, "anon-1", "anon").await;
+    drain_queue(&store, &sender, "AAECAwQFBgcICQoLDA0ODxAR").await;
 
     assert_eq!(sender.sent().len(), 1, "events should be sent as one batch");
     let events = sender.sent()[0]["events"]
@@ -418,53 +418,60 @@ async fn drain_queue_sends_all_events_in_one_batch() {
 }
 
 #[tokio::test]
-async fn drain_queue_anonymizes_legacy_signed_in_rows() {
-    // A row queued by an older client with a `dayone:user_id` identity must be
-    // sent under the current anonymous identity, never tied to the account.
+async fn drain_queue_discards_rows_without_the_current_consent_identity() {
     let store = test_store();
     let created_at = crate::util::now_epoch_ms();
     let anon_id = "AAECAwQFBgcICQoLDA0ODxAR";
     store
         .enqueue_analytics_event(
             "dayone_cli_entry_create",
-            r#"{"_en":"dayone_cli_entry_create","is_signed_in":false,"device_info_app_version":"0.1.0","device_info_os":"macos aarch64"}"#,
+            r#"{"_en":"dayone_cli_entry_create","is_signed_in":false}"#,
             created_at,
             Some(anon_id),
             Some("anon"),
         )
-        .expect("enqueue anonymous event");
+        .expect("enqueue current event");
+    for (id, kind) in [
+        (Some("YWJjZGVmZ2hpamtsbW5vcHFy"), Some("anon")),
+        (None, None),
+        (Some("invalid-id"), Some("anon")),
+        // Match the current ID so checking only the ID cannot pass this test.
+        (Some(anon_id), Some("dayone:user_id")),
+        (Some(anon_id), None),
+    ] {
+        store
+            .enqueue_analytics_event(
+                "dayone_cli_user_sign_in",
+                r#"{"_en":"dayone_cli_user_sign_in","is_signed_in":true}"#,
+                created_at + 60_000,
+                id,
+                kind,
+            )
+            .expect("enqueue stale or unidentified event");
+    }
+    let sender = StubSender::new(false);
+    drain_queue(&store, &sender, anon_id).await;
+    let sent = sender.sent();
+    let names: Vec<_> = sent
+        .iter()
+        .flat_map(|batch| batch["events"].as_array().unwrap())
+        .map(|event| event["_en"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["dayone_cli_entry_create"]);
+    assert!(store.take_analytics_events(10).expect("take").is_empty());
+
+    // An entirely stale batch must be discarded without an empty request.
     store
         .enqueue_analytics_event(
             "dayone_cli_user_sign_in",
-            r#"{"_en":"dayone_cli_user_sign_in","is_signed_in":true,"device_info_app_version":"0.1.0","device_info_os":"macos aarch64"}"#,
-            created_at + 1,
-            Some("user-9"),
-            Some("dayone:user_id"),
+            r#"{"_en":"dayone_cli_user_sign_in","is_signed_in":true}"#,
+            created_at + 60_000,
+            None,
+            None,
         )
-        .expect("enqueue legacy signed-in event");
-    let sender = StubSender::new(false);
-
-    drain_queue(&store, &sender, anon_id, "anon").await;
-
-    let sent = sender.sent();
-    assert_eq!(
-        sent.len(),
-        1,
-        "both events collapse into one anonymous batch"
-    );
-    let body = &sent[0];
-    assert_eq!(body["commonProps"]["_ut"], json!("anon"));
-    assert_eq!(body["commonProps"]["_ui"], json!(anon_id));
-    assert!(
-        !body.to_string().contains("dayone:user_id"),
-        "the account identity must never be sent"
-    );
-    assert!(
-        !body.to_string().contains("user-9"),
-        "the user id must never be sent"
-    );
-    let events = body["events"].as_array().expect("events array");
-    assert_eq!(events.len(), 2, "both queued events should be in the batch");
+        .expect("enqueue legacy event");
+    drain_queue(&store, &sender, anon_id).await;
+    assert_eq!(sender.sent().len(), 1);
     assert!(store.take_analytics_events(10).expect("take").is_empty());
 }
 
@@ -476,13 +483,13 @@ async fn drain_queue_retains_and_bumps_on_failure() {
             "dayone_cli_journal_create",
             r#"{"_en":"dayone_cli_journal_create","is_signed_in":false,"device_info_app_version":"0.1.0","device_info_os":"linux x86_64"}"#,
             crate::util::now_epoch_ms(),
-            None,
-            None,
+            Some("AAECAwQFBgcICQoLDA0ODxAR"),
+            Some("anon"),
         )
         .expect("enqueue");
     let sender = StubSender::new(true);
 
-    drain_queue(&store, &sender, "anon-1", "anon").await;
+    drain_queue(&store, &sender, "AAECAwQFBgcICQoLDA0ODxAR").await;
 
     let remaining = store.take_analytics_events(10).expect("take");
     assert_eq!(remaining.len(), 1, "failed event should stay queued");
@@ -598,4 +605,51 @@ fn server_analytics_enabled_when_setting_true() {
         .upsert_user_settings(None, r#"{"track_usage_statistics": true}"#)
         .expect("settings save");
     assert!(server_analytics_enabled(&store));
+}
+
+#[tokio::test]
+async fn stale_backlog_does_not_delay_current_consent_events() {
+    let store = test_store();
+    let now = crate::util::now_epoch_ms();
+    let current_id = "AAECAwQFBgcICQoLDA0ODxAR";
+    for _ in 0..MAX_FLUSH_PER_RUN {
+        store
+            .enqueue_analytics_event(
+                "dayone_cli_user_sign_in",
+                r#"{"_en":"dayone_cli_user_sign_in","is_signed_in":true}"#,
+                now + 60_000,
+                Some("YWJjZGVmZ2hpamtsbW5vcHFy"),
+                Some("anon"),
+            )
+            .expect("enqueue stale backlog");
+    }
+    // The current identity must not exempt expired activity from retention.
+    store
+        .enqueue_analytics_event(
+            "dayone_cli_user_sign_in",
+            r#"{"_en":"dayone_cli_user_sign_in","is_signed_in":true}"#,
+            now - 31 * 24 * 60 * 60 * 1000,
+            Some(current_id),
+            Some("anon"),
+        )
+        .expect("enqueue expired event");
+    store
+        .enqueue_analytics_event(
+            "dayone_cli_entry_create",
+            r#"{"_en":"dayone_cli_entry_create","is_signed_in":false}"#,
+            now,
+            Some(current_id),
+            Some("anon"),
+        )
+        .expect("enqueue current event");
+    let sender = StubSender::new(false);
+    drain_queue(&store, &sender, current_id).await;
+    let sent = sender.sent();
+    let names: Vec<_> = sent
+        .iter()
+        .flat_map(|batch| batch["events"].as_array().unwrap())
+        .map(|event| event["_en"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["dayone_cli_entry_create"]);
+    assert!(store.take_analytics_events(100).expect("take").is_empty());
 }

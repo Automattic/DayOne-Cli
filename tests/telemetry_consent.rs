@@ -4,7 +4,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU16, Ordering},
 };
 use std::thread;
 use std::time::Duration;
@@ -18,6 +18,7 @@ struct Collector {
     address: String,
     requests: Arc<Mutex<Vec<String>>>,
     stop: Arc<AtomicBool>,
+    status: Arc<AtomicU16>,
     worker: Option<thread::JoinHandle<()>>,
 }
 
@@ -30,12 +31,15 @@ impl Collector {
         let received = requests.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
+        let status = Arc::new(AtomicU16::new(200));
+        let response_status = status.clone();
         let worker = thread::spawn(move || {
             let mut clients = Vec::new();
             while !stopped.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         let received = received.clone();
+                        let response_status = response_status.clone();
                         clients.push(thread::spawn(move || {
                         stream.set_nonblocking(false).unwrap();
                         stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
@@ -58,7 +62,9 @@ impl Collector {
                         if !request.is_empty() {
                             received.lock().unwrap().push(String::from_utf8_lossy(&request).into_owned());
                         }
-                        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+                        let status = response_status.load(Ordering::Relaxed);
+                        let response = format!("HTTP/1.1 {status} Test\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}");
+                        let _ = stream.write_all(response.as_bytes());
                         }));
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -75,6 +81,7 @@ impl Collector {
             address,
             requests,
             stop,
+            status,
             worker: Some(worker),
         }
     }
@@ -104,6 +111,18 @@ impl Collector {
 
     fn requests(&self) -> Vec<String> {
         self.requests.lock().unwrap().clone()
+    }
+
+    fn run(&self, dir: &Path, args: &[&str]) {
+        assert_success(&self.command(dir).args(args).output().unwrap());
+    }
+
+    fn tracks_batches(&self) -> Vec<serde_json::Value> {
+        self.requests()
+            .iter()
+            .filter(|request| request.starts_with("POST /tracks "))
+            .map(|request| serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap())
+            .collect()
     }
 }
 
@@ -617,4 +636,139 @@ fn help_profile_and_doctor_do_not_collect_even_with_consent() {
         assert_no_collection(dir.path(), &collector);
     }
     assert!(!dir.path().join("profiles").exists());
+}
+
+#[test]
+fn consent_reset_excludes_future_dated_activity_in_other_profiles() {
+    let dir = TempDir::new().unwrap();
+    seed_config(dir.path(), "");
+    // Both profiles share the consent configuration, but have separate queues.
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.path().join("config.toml"))
+        .unwrap();
+    writeln!(file, "[profiles.secondary]\nbase_url = 'https://dayone.me'").unwrap();
+    drop(file);
+    let collector = Collector::new();
+    collector.run(dir.path(), &["telemetry", "enable"]);
+    collector.status.store(503, Ordering::Relaxed);
+    let future = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+        + 60_000;
+    for profile in ["production", "secondary"] {
+        // Real CLI events remain queued after the collector rejects delivery.
+        collector.run(dir.path(), &["--profile", profile, "outbox", "list"]);
+        let db =
+            Connection::open(dir.path().join(format!("profiles/{profile}/dayone.db"))).unwrap();
+        // Model a clock correction before withdrawal without changing the
+        // system clock, event properties, or the original identity.
+        assert_eq!(
+            db.execute("UPDATE analytics_events SET created_at_ms = ?1", [future])
+                .unwrap(),
+            1
+        );
+    }
+    let old_id = config(dir.path())["analytics"]["anonymous_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    collector.requests.lock().unwrap().clear();
+    collector.status.store(200, Ordering::Relaxed);
+    collector.run(dir.path(), &["telemetry", "disable"]);
+    collector.run(dir.path(), &["outbox", "list"]);
+    assert!(
+        collector.requests().is_empty(),
+        "withdrawn consent must stop reporting"
+    );
+    collector.run(dir.path(), &["telemetry", "enable"]);
+    assert!(
+        config(dir.path())["analytics"]["consent_recorded_at_ms"]
+            .as_integer()
+            .unwrap()
+            < future,
+        "the fixture must leave old events dated after the new consent"
+    );
+    for profile in ["secondary", "production"] {
+        collector.run(dir.path(), &["--profile", profile, "list", "journals"]);
+    }
+    let batches = collector.tracks_batches();
+    let commands: Vec<_> = batches
+        .iter()
+        .flat_map(|batch| batch["events"].as_array().unwrap())
+        .map(|event| event["command"].as_str().unwrap())
+        .collect();
+    // Positive controls must arrive from both profiles; old outbox events
+    // must neither retain their old identity nor be reassigned to the new one.
+    assert_eq!(commands, ["list", "list"]);
+    assert!(
+        batches
+            .iter()
+            .all(|batch| batch["commonProps"]["_ui"] != old_id)
+    );
+}
+
+#[test]
+fn clock_correction_preserves_retries_under_unchanged_consent() {
+    let dir = TempDir::new().unwrap();
+    seed_config(dir.path(), "");
+    let collector = Collector::new();
+    collector.run(dir.path(), &["telemetry", "enable"]);
+    let granted_at = config(dir.path())["analytics"]["consent_recorded_at_ms"]
+        .as_integer()
+        .unwrap();
+    collector.status.store(503, Ordering::Relaxed);
+    collector.run(dir.path(), &["outbox", "list"]);
+    collector.run(dir.path(), &["outbox", "list"]);
+    let old_id = config(dir.path())["analytics"]["anonymous_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let db = Connection::open(dir.path().join("profiles/production/dayone.db")).unwrap();
+    // Both events were actually recorded after consent. Model a clock that
+    // places one at the consent timestamp and the other just before it.
+    assert_eq!(
+        db.execute(
+            "UPDATE analytics_events SET created_at_ms = ?1",
+            [granted_at]
+        )
+        .unwrap(),
+        2
+    );
+    db.execute("UPDATE analytics_events SET created_at_ms = ?1 WHERE id = (SELECT MIN(id) FROM analytics_events)", [granted_at - 1_000]).unwrap();
+    collector.requests.lock().unwrap().clear();
+    assert_success(
+        &collector
+            .command(dir.path())
+            .env("DAYONE_TELEMETRY", "0")
+            .args(["outbox", "list"])
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        collector.requests().is_empty(),
+        "a temporary override must stop delivery"
+    );
+    collector.status.store(200, Ordering::Relaxed);
+    collector.run(dir.path(), &["list", "journals"]);
+    let batches = collector.tracks_batches();
+    let commands: Vec<_> = batches
+        .iter()
+        .flat_map(|batch| batch["events"].as_array().unwrap())
+        .map(|event| event["command"].as_str().unwrap())
+        .collect();
+    assert_eq!(commands, ["outbox", "outbox", "list"]);
+    assert!(
+        batches
+            .iter()
+            .all(|batch| batch["commonProps"]["_ui"] == old_id)
+    );
+    // A subsequent flush must not duplicate successfully delivered retries.
+    collector.requests.lock().unwrap().clear();
+    collector.run(dir.path(), &["list", "journals"]);
+    let batches = collector.tracks_batches();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0]["events"].as_array().unwrap().len(), 1);
+    assert_eq!(batches[0]["events"][0]["command"], "list");
 }
