@@ -247,6 +247,7 @@ fn build_rich_text_json_from_body_with_placeholders(
         }
 
         if let Some(identifier) = embedded_identifier {
+            drop_body_separator_before_embed(&mut contents);
             contents.push(json!({
                 "embeddedObjects": [{
                     "type": placeholder.moment_type.as_rich_text_embed_type(),
@@ -338,6 +339,49 @@ fn append_rtjson_nodes_from_markdown_cached(
     };
     cache.insert(text.to_owned(), produced_nodes.clone());
     contents.extend(produced_nodes);
+}
+
+/// Remove the markdown blank line that separates an embedded object from the block
+/// above it.
+///
+/// The body markdown separates an appended attachment from the text above it with a
+/// blank line. That blank line is markdown layout, not entry content, but the
+/// alignment pass copies the source fragment's trailing newlines into the last text
+/// node, and clients render two trailing newlines as a blank line above the
+/// attachment. A fragment that ends with an embedded object gets an extra
+/// newline-only text node instead, which clients render as an empty line between the
+/// two attachments. Drop both forms.
+fn drop_body_separator_before_embed(contents: &mut Vec<Value>) {
+    const MAX_TRAILING_NEWLINES: usize = 1;
+
+    let Some(Value::Object(node)) = contents.last_mut() else {
+        return;
+    };
+    if node.contains_key("embeddedObjects") {
+        return;
+    }
+    let Some(Value::String(text)) = node.get_mut("text") else {
+        return;
+    };
+
+    if text
+        .chars()
+        .all(|character| character == '\n' || character == '\r')
+    {
+        contents.pop();
+        return;
+    }
+
+    let newline_indices: Vec<usize> = text.match_indices('\n').map(|(index, _)| index).collect();
+    let kept_newlines = MAX_TRAILING_NEWLINES.min(newline_indices.len());
+    if kept_newlines >= newline_indices.len() {
+        return;
+    }
+    let mut drop_from = newline_indices[kept_newlines];
+    if drop_from > 0 && text.as_bytes()[drop_from - 1] == b'\r' {
+        drop_from -= 1;
+    }
+    text.truncate(drop_from);
 }
 
 fn align_fragment_trailing_newlines(nodes: &mut Vec<crate::convert::model::RtjNode>, source: &str) {
@@ -845,5 +889,77 @@ mod tests {
         });
         assert!(existing_entry_has_meaningful_rich_text(Some(&formatted)));
         assert!(!existing_entry_has_meaningful_rich_text(Some(&plain_cli)));
+    }
+
+    #[test]
+    fn build_rich_text_json_from_body_with_placeholders_drops_the_body_separator_blank_line() {
+        let body = "# Entry Title\n\n![](dayone-moment://IMG-1)";
+        let placeholders = parse_dayone_moment_placeholders(body);
+        let raw = build_rich_text_json_from_body_with_placeholders(
+            body,
+            &placeholders,
+            &[new_moment("IMG-1", MediaType::Image)],
+            1_000_000,
+        )
+        .expect("rich text should be created");
+        let parsed: Value = serde_json::from_str(&raw).expect("rich text should parse");
+        assert_eq!(
+            parsed["contents"],
+            json!([
+                {"attributes": {"line": {"header": 1}}, "text": "Entry Title\n"},
+                {"embeddedObjects": [{"type": "photo", "identifier": "IMG-1"}]}
+            ])
+        );
+    }
+
+    #[test]
+    fn drop_body_separator_before_embed_keeps_one_trailing_newline() {
+        fn capped(text: &str) -> Value {
+            let mut contents = vec![json!({"text": text})];
+            drop_body_separator_before_embed(&mut contents);
+            contents
+                .first()
+                .and_then(|node| node.get("text"))
+                .cloned()
+                .unwrap_or(Value::Null)
+        }
+
+        assert_eq!(capped("Entry Title\n\n"), json!("Entry Title\n"));
+        assert_eq!(capped("Entry Title\n\n\n\n"), json!("Entry Title\n"));
+        assert_eq!(capped("Entry Title\r\n\r\n"), json!("Entry Title\r\n"));
+        assert_eq!(capped("Entry Title\n"), json!("Entry Title\n"));
+        assert_eq!(capped("Entry Title"), json!("Entry Title"));
+    }
+
+    #[test]
+    fn drop_body_separator_before_embed_removes_newline_only_text_node() {
+        let mut contents = vec![
+            json!({"embeddedObjects": [{"type": "photo", "identifier": "IMG-1"}]}),
+            json!({"text": "\n\n"}),
+        ];
+        drop_body_separator_before_embed(&mut contents);
+        assert_eq!(
+            contents,
+            vec![json!({"embeddedObjects": [{"type": "photo", "identifier": "IMG-1"}]})]
+        );
+    }
+
+    #[test]
+    fn drop_body_separator_before_embed_ignores_unrelated_nodes() {
+        let mut only_embed = vec![json!({"embeddedObjects": [{"type": "photo"}]})];
+        drop_body_separator_before_embed(&mut only_embed);
+        assert_eq!(
+            only_embed,
+            vec![json!({"embeddedObjects": [{"type": "photo"}]})]
+        );
+
+        let mut attributes_only = vec![json!({"attributes": {}, "text": "Entry Title\n\n"})];
+        attributes_only[0]["schemaVersion"] = json!(2);
+        drop_body_separator_before_embed(&mut attributes_only);
+        assert_eq!(attributes_only[0]["text"], json!("Entry Title\n"));
+
+        let mut empty: Vec<Value> = Vec::new();
+        drop_body_separator_before_embed(&mut empty);
+        assert!(empty.is_empty());
     }
 }

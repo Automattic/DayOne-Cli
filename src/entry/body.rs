@@ -1095,4 +1095,75 @@ mod tests {
             "![](dayone-moment:/video/)\n\n![](dayone-moment://IMG-1)"
         );
     }
+
+    #[test]
+    fn build_entry_content_appends_attachment_without_a_blank_line_gap() {
+        // Regression for DAYONE-1185: the blank line separator added to the body
+        // markdown was copied into the preceding rich text line, so clients showed
+        // an extra blank line between the text and the attached image.
+        let content = build_entry_content(
+            None,
+            None,
+            "entry-attach-1",
+            "# Entry Title".to_owned(),
+            None,
+            1_000_000,
+            &[new_moment("IMG-A1", MediaType::Image)],
+        )
+        .expect("content build should succeed");
+
+        assert_eq!(
+            content.get("body").and_then(Value::as_str),
+            Some("# Entry Title\n\n![](dayone-moment://IMG-A1)")
+        );
+
+        let raw = content
+            .get("richTextJSON")
+            .and_then(Value::as_str)
+            .expect("richTextJSON should exist");
+        let parsed: Value = serde_json::from_str(raw).expect("rich text should parse");
+        assert_eq!(
+            parsed["contents"],
+            json!([
+                {"attributes": {"line": {"header": 1}}, "text": "Entry Title\n"},
+                {"embeddedObjects": [{"type": "photo", "identifier": "IMG-A1"}]}
+            ])
+        );
+    }
+
+    #[test]
+    fn build_entry_content_appends_paragraph_and_multiple_attachments_without_blank_lines() {
+        let content = build_entry_content(
+            None,
+            None,
+            "entry-attach-2",
+            "Morning run.".to_owned(),
+            None,
+            1_000_000,
+            &[
+                new_moment("IMG-A2", MediaType::Image),
+                new_moment("PDF-A2", MediaType::PdfAttachment),
+            ],
+        )
+        .expect("content build should succeed");
+
+        let raw = content
+            .get("richTextJSON")
+            .and_then(Value::as_str)
+            .expect("richTextJSON should exist");
+        let parsed: Value = serde_json::from_str(raw).expect("rich text should parse");
+        assert_eq!(
+            parsed["contents"],
+            json!([
+                {"text": "Morning run.\n"},
+                {"embeddedObjects": [{"type": "photo", "identifier": "IMG-A2"}]},
+                {
+                    "embeddedObjects": [{
+                        "type": "pdfAttachment",
+                        "identifier": "PDF-A2"
+                    }]
+                }
+            ])
+        );
+    }
 }
