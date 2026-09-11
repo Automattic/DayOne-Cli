@@ -1098,9 +1098,9 @@ mod tests {
 
     #[test]
     fn build_entry_content_appends_attachment_without_a_blank_line_gap() {
-        // Regression for DAYONE-1185: the blank line separator added to the body
-        // markdown was copied into the preceding rich text line, so clients showed
-        // an extra blank line between the text and the attached image.
+        // Regression: the blank line separator added to the body markdown was copied
+        // into the preceding rich text line, so clients showed an extra blank line
+        // between the text and the attached image.
         let content = build_entry_content(
             None,
             None,
@@ -1125,7 +1125,7 @@ mod tests {
         assert_eq!(
             parsed["contents"],
             json!([
-                {"attributes": {"line": {"header": 1}}, "text": "Entry Title\n"},
+                {"attributes": {"line": {"header": 1}}, "text": "Entry Title"},
                 {"embeddedObjects": [{"type": "photo", "identifier": "IMG-A1"}]}
             ])
         );
@@ -1155,7 +1155,7 @@ mod tests {
         assert_eq!(
             parsed["contents"],
             json!([
-                {"text": "Morning run.\n"},
+                {"text": "Morning run."},
                 {"embeddedObjects": [{"type": "photo", "identifier": "IMG-A2"}]},
                 {
                     "embeddedObjects": [{
