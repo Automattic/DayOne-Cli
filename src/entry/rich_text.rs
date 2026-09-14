@@ -223,15 +223,6 @@ fn build_rich_text_json_from_body_with_placeholders(
     let mut inline_new_moment_ids: HashSet<&str> = HashSet::new();
 
     for placeholder in placeholders {
-        if placeholder.start > cursor {
-            let text = &body[cursor..placeholder.start];
-            append_rtjson_nodes_from_markdown_cached(
-                &mut contents,
-                text,
-                &mut markdown_fragment_cache,
-            );
-        }
-
         let mut embedded_identifier: Option<String> = None;
         if let Some(identifier) = &placeholder.identifier {
             if new_moments.iter().any(|moment| moment.id == *identifier) {
@@ -244,6 +235,26 @@ fn build_rich_text_json_from_body_with_placeholders(
             next_attachment_idx += 1;
             inline_new_moment_ids.insert(candidate.id.as_str());
             embedded_identifier = Some(candidate.id.clone());
+        }
+
+        if placeholder.start > cursor {
+            let text = &body[cursor..placeholder.start];
+            // A blank line above an embedded object is markdown layout, not entry
+            // content. The body separates an appended attachment from the block above
+            // it with a blank line, and the conversion mirrors fragment trailing
+            // newlines into the last text node, which clients render as a blank line
+            // above the attachment. Drop the separator before converting the
+            // fragment.
+            let text = if embedded_identifier.is_some() {
+                text.trim_end_matches(['\r', '\n'])
+            } else {
+                text
+            };
+            append_rtjson_nodes_from_markdown_cached(
+                &mut contents,
+                text,
+                &mut markdown_fragment_cache,
+            );
         }
 
         if let Some(identifier) = embedded_identifier {
@@ -845,5 +856,73 @@ mod tests {
         });
         assert!(existing_entry_has_meaningful_rich_text(Some(&formatted)));
         assert!(!existing_entry_has_meaningful_rich_text(Some(&plain_cli)));
+    }
+
+    #[test]
+    fn build_rich_text_json_from_body_with_placeholders_drops_the_body_separator_blank_line() {
+        let body = "# Entry Title\n\n![](dayone-moment://IMG-1)";
+        let placeholders = parse_dayone_moment_placeholders(body);
+        let raw = build_rich_text_json_from_body_with_placeholders(
+            body,
+            &placeholders,
+            &[new_moment("IMG-1", MediaType::Image)],
+            1_000_000,
+        )
+        .expect("rich text should be created");
+        let parsed: Value = serde_json::from_str(&raw).expect("rich text should parse");
+        assert_eq!(
+            parsed["contents"],
+            json!([
+                {"attributes": {"line": {"header": 1}}, "text": "Entry Title"},
+                {"embeddedObjects": [{"type": "photo", "identifier": "IMG-1"}]}
+            ])
+        );
+    }
+
+    #[test]
+    fn build_rich_text_json_from_body_with_placeholders_drops_the_body_separator_for_crlf() {
+        let body = "# Entry Title\r\n\r\n![](dayone-moment://IMG-1)";
+        let placeholders = parse_dayone_moment_placeholders(body);
+        let raw = build_rich_text_json_from_body_with_placeholders(
+            body,
+            &placeholders,
+            &[new_moment("IMG-1", MediaType::Image)],
+            1_000_000,
+        )
+        .expect("rich text should be created");
+        let parsed: Value = serde_json::from_str(&raw).expect("rich text should parse");
+        assert_eq!(
+            parsed["contents"],
+            json!([
+                {"attributes": {"line": {"header": 1}}, "text": "Entry Title"},
+                {"embeddedObjects": [{"type": "photo", "identifier": "IMG-1"}]}
+            ])
+        );
+    }
+
+    #[test]
+    fn build_rich_text_json_from_body_with_unresolved_placeholder_keeps_the_separator() {
+        // Only a placeholder that becomes an embedded object drops the separator. An
+        // unbound placeholder with no matching attachment stays markdown text, so the
+        // fragment above it keeps whatever the user wrote.
+        let body = "# Entry Title\n\n![](dayone-moment:/video/)";
+        let placeholders = parse_dayone_moment_placeholders(body);
+        let raw = build_rich_text_json_from_body_with_placeholders(
+            body,
+            &placeholders,
+            &[new_moment("IMG-1", MediaType::Image)],
+            1_000_000,
+        )
+        .expect("rich text should be created");
+        let parsed: Value = serde_json::from_str(&raw).expect("rich text should parse");
+        assert_eq!(parsed["contents"][0]["text"], json!("Entry Title\n\n"));
+        assert!(
+            parsed["contents"].as_array().is_some_and(|contents| {
+                contents
+                    .iter()
+                    .any(|node| node["embeddedObjects"][0]["identifier"].as_str() == Some("IMG-1"))
+            }),
+            "the unmatched attachment should still be appended: {raw}"
+        );
     }
 }
