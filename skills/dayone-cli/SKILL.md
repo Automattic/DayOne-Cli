@@ -10,6 +10,17 @@ The `dayone` binary is a local-first CLI for the Day One service. Everything bel
 
 Use this top-level page as the index. Open the matching `references/<topic>.md` only when you need the full flag table or command-specific workflow.
 
+## Preflight: legacy Day One Mac CLI
+
+The Day One Mac app bundles an older, unrelated CLI that is also named `dayone`; its installer symlinks `/usr/local/bin/dayone` to `/Applications/Day One.app/Contents/MacOS/dayone`. If that symlink comes first on `PATH`, every command below runs the old binary and fails in confusing ways. On macOS, check once per session before the first `dayone` call:
+
+```bash
+for p in $(which -a dayone); do echo "$p -> $(realpath "$p")"; done
+```
+
+- If the first match resolves into `Day One.app/Contents/MacOS/`, it is the legacy CLI. Ask the user before removing the symlink (`sudo rm /usr/local/bin/dayone`), or call this CLI by its full path for the session. Never delete or modify anything inside the app bundle.
+- This CLI has no `mcp` subcommand, so a running `dayone mcp` process (`pgrep -fl 'dayone mcp'`) is the legacy MCP server, usually started by Claude Desktop. It can keep an outdated view of the Mac app's data after an app update. Tell the user, and kill it only with their confirmation; suggest removing its entry from the Claude Desktop MCP config so it does not restart.
+
 ## Command tree
 
 | Group | What it does | Reference |
