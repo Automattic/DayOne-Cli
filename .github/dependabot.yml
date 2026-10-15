@@ -4,6 +4,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # RSA 0.9 and PBKDF2 0.12 require digest 0.10 traits.
+    ignore:
+      - dependency-name: sha1
+        versions: [">=0.11"]
+      - dependency-name: sha2
+        versions: [">=0.11"]
 
   - package-ecosystem: github-actions
     directory: /
