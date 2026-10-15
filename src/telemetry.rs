@@ -145,23 +145,19 @@ pub fn init(config: &crate::config::AppConfig, config_dir: &std::path::Path) -> 
 
         let config_dir = config_dir.to_owned();
         let recorded_at_ms = config.analytics.consent_recorded_at_ms.unwrap();
-        let guard = sentry::init((
-            dsn,
-            sentry::ClientOptions {
-                release: Some(env!("CARGO_PKG_VERSION").into()),
-                environment: Some(environment().into()),
-                send_default_pii: false,
-                attach_stacktrace: true,
-                before_send: Some(std::sync::Arc::new(move |event| {
-                    if crate::consent::still_permitted(&config_dir, recorded_at_ms) {
-                        scrub::event(event)
-                    } else {
-                        None
-                    }
-                })),
-                ..Default::default()
-            },
-        ));
+        let mut options = sentry::ClientOptions::default();
+        options.release = Some(env!("CARGO_PKG_VERSION").into());
+        options.environment = Some(environment().into());
+        options.send_default_pii = false;
+        options.attach_stacktrace = true;
+        options.before_send = Some(std::sync::Arc::new(move |event| {
+            if crate::consent::still_permitted(&config_dir, recorded_at_ms) {
+                scrub::event(event)
+            } else {
+                None
+            }
+        }));
+        let guard = sentry::init((dsn, options));
 
         sentry::configure_scope(|scope| {
             scope.set_tag("os.family", std::env::consts::FAMILY);
@@ -526,6 +522,109 @@ mod tests {
     use super::*;
     use crate::test_util::with_env;
 
+    #[cfg(feature = "telemetry")]
+    fn consented_config(config_dir: &std::path::Path) -> crate::config::AppConfig {
+        let mut config = crate::config::AppConfig::default_config();
+        config.analytics.consent = crate::config::ConsentState::Granted;
+        config.analytics.consent_version = crate::consent::DISCLOSURE_VERSION;
+        config.analytics.consent_recorded_at_ms = Some(1);
+        config.save(config_dir).expect("save consent");
+        config
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn init_preserves_client_privacy_and_consent_options() {
+        with_env(
+            &[
+                ("DO_NOT_TRACK", None),
+                ("DAYONE_TELEMETRY", None),
+                ("DAYONE_SENTRY_DSN", Some("https://public@sentry.invalid/1")),
+            ],
+            || {
+                let dir = tempfile::tempdir().expect("config directory");
+                let mut config = consented_config(dir.path());
+                sentry::Hub::run(
+                    std::sync::Arc::new(sentry::Hub::new(
+                        None,
+                        std::sync::Arc::new(Default::default()),
+                    )),
+                    || {
+                        let guard = init(&config, dir.path());
+                        let client = guard._inner.as_ref().expect("Sentry client");
+                        let options = client.options();
+                        assert_eq!(options.release.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+                        assert_eq!(options.environment.as_deref(), Some(environment()));
+                        assert!(!options.send_default_pii);
+                        assert!(options.attach_stacktrace);
+                        let before_send = options.before_send.as_ref().expect("privacy hook");
+                        let event = sentry::protocol::Event {
+                            message: Some("request to https://private.example/secret".into()),
+                            ..Default::default()
+                        };
+                        let event = before_send(event).expect("event retained");
+                        assert_eq!(event.message.as_deref(), Some("request to <URL>"));
+
+                        config.analytics.consent = crate::config::ConsentState::Denied;
+                        config.save(dir.path()).expect("withdraw consent");
+                        assert!(before_send(Default::default()).is_none());
+
+                        config.analytics.consent = crate::config::ConsentState::Granted;
+                        config.analytics.consent_recorded_at_ms = Some(2);
+                        config.save(dir.path()).expect("renew consent");
+                        assert!(before_send(Default::default()).is_none());
+                    },
+                );
+            },
+        );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn init_does_not_create_client_after_opt_out() {
+        for (name, value) in [("DO_NOT_TRACK", "1"), ("DAYONE_TELEMETRY", "0")] {
+            with_env(
+                &[
+                    ("DO_NOT_TRACK", None),
+                    ("DAYONE_TELEMETRY", None),
+                    ("DAYONE_SENTRY_DSN", Some("https://public@sentry.invalid/1")),
+                    (name, Some(value)),
+                ],
+                || {
+                    let dir = tempfile::tempdir().expect("config directory");
+                    let config = consented_config(dir.path());
+                    assert!(init(&config, dir.path())._inner.is_none());
+                },
+            );
+        }
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn init_requires_current_consent() {
+        with_env(
+            &[
+                ("DO_NOT_TRACK", None),
+                ("DAYONE_TELEMETRY", None),
+                ("DAYONE_SENTRY_DSN", Some("https://public@sentry.invalid/1")),
+            ],
+            || {
+                let dir = tempfile::tempdir().expect("config directory");
+                let mut config = crate::config::AppConfig::default_config();
+                assert!(init(&config, dir.path())._inner.is_none());
+                config = consented_config(dir.path());
+                config.analytics.consent_version += 1;
+                assert!(init(&config, dir.path())._inner.is_none());
+                config.analytics.consent_version = crate::consent::DISCLOSURE_VERSION;
+                config.analytics.consent_recorded_at_ms = None;
+                assert!(init(&config, dir.path())._inner.is_none());
+                config.analytics.consent_recorded_at_ms = Some(1);
+                config.analytics.consent = crate::config::ConsentState::Denied;
+                assert!(init(&config, dir.path())._inner.is_none());
+            },
+        );
+    }
+
     #[test]
     fn is_enabled_default_true() {
         with_env(
@@ -684,11 +783,9 @@ mod tests {
         }
 
         let transport = Arc::new(CaptureTransport::default());
-        let options = sentry::ClientOptions {
-            dsn: Some("https://public@sentry.invalid/1".parse().expect("test DSN")),
-            transport: Some(Arc::new(transport.clone())),
-            ..Default::default()
-        };
+        let mut options = sentry::ClientOptions::default();
+        options.dsn = Some("https://public@sentry.invalid/1".parse().expect("test DSN"));
+        options.transport = Some(Arc::new(transport.clone()));
         sentry::Hub::run(
             Arc::new(sentry::Hub::new(
                 Some(Arc::new(options.into())),
