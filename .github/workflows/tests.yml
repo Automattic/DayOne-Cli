@@ -40,6 +40,45 @@ jobs:
       - name: Run tests
         run: cargo test --locked
 
+  windows-release-build:
+    name: Windows release build (x64)
+    runs-on: windows-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C target-feature=+crt-static"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-x86_64-pc-windows-msvc-release
+
+      - name: Run scheduler tests
+        run: >-
+          cargo test --locked --target x86_64-pc-windows-msvc
+          --no-default-features --features production-default,telemetry
+          --bin dayone commands::sync_schedule::tests
+
+      - name: Build release binary
+        run: >-
+          cargo build --release --locked --target x86_64-pc-windows-msvc
+          --no-default-features --features production-default,telemetry
+
+      - name: Check release binary
+        run: |
+          & ./target/x86_64-pc-windows-msvc/release/dayone.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./target/x86_64-pc-windows-msvc/release/dayone.exe sync-schedule --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   macos-release-build:
     name: macOS release build (${{ matrix.arch }})
     runs-on: ${{ matrix.os }}

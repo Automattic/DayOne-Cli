@@ -1,12 +1,19 @@
 use anyhow::{Context, Result, anyhow};
 use serde::Serialize;
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 use std::fs;
-use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 
+#[cfg(any(target_os = "macos", test))]
 const JOB_ID: &str = "com.dayone.cli.sync";
+#[cfg(any(target_os = "linux", test))]
 const SYSTEMD_UNIT_NAME: &str = "dayone-cli-sync.service";
+#[cfg(target_os = "linux")]
 const SYSTEMD_TIMER_NAME: &str = "dayone-cli-sync.timer";
+#[cfg(target_os = "windows")]
 const WINDOWS_TASK_NAME: &str = r#"\DayOne CLI Sync"#;
 
 #[derive(Debug, Clone)]
@@ -77,62 +84,90 @@ impl ScheduleSpec {
 
 #[derive(Debug, Clone, Copy)]
 enum Backend {
+    #[cfg(target_os = "macos")]
     MacLaunchd,
+    #[cfg(target_os = "linux")]
     LinuxSystemdUser,
+    #[cfg(target_os = "windows")]
     WindowsTaskScheduler,
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     Unsupported,
 }
 
 impl Backend {
     fn current() -> Self {
-        if cfg!(target_os = "macos") {
+        #[cfg(target_os = "macos")]
+        {
             Self::MacLaunchd
-        } else if cfg!(target_os = "linux") {
+        }
+        #[cfg(target_os = "linux")]
+        {
             Self::LinuxSystemdUser
-        } else if cfg!(target_os = "windows") {
+        }
+        #[cfg(target_os = "windows")]
+        {
             Self::WindowsTaskScheduler
-        } else {
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        {
             Self::Unsupported
         }
     }
 
     fn name(self) -> &'static str {
         match self {
+            #[cfg(target_os = "macos")]
             Self::MacLaunchd => "launchd",
+            #[cfg(target_os = "linux")]
             Self::LinuxSystemdUser => "systemd-user",
+            #[cfg(target_os = "windows")]
             Self::WindowsTaskScheduler => "windows-task-scheduler",
+            #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
             Self::Unsupported => "unsupported",
         }
     }
 
     fn enable(self, spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
         match self {
+            #[cfg(target_os = "macos")]
             Self::MacLaunchd => macos_enable(spec),
+            #[cfg(target_os = "linux")]
             Self::LinuxSystemdUser => linux_enable(spec),
+            #[cfg(target_os = "windows")]
             Self::WindowsTaskScheduler => windows_enable(spec),
+            #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
             Self::Unsupported => unsupported_output(spec, false),
         }
     }
 
     fn status(self, spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
         match self {
+            #[cfg(target_os = "macos")]
             Self::MacLaunchd => macos_status(spec),
+            #[cfg(target_os = "linux")]
             Self::LinuxSystemdUser => linux_status(spec),
+            #[cfg(target_os = "windows")]
             Self::WindowsTaskScheduler => windows_status(spec),
+            #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
             Self::Unsupported => unsupported_output(spec, false),
         }
     }
 
     fn disable(self, spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
         match self {
+            #[cfg(target_os = "macos")]
             Self::MacLaunchd => macos_disable(spec),
+            #[cfg(target_os = "linux")]
             Self::LinuxSystemdUser => linux_disable(spec),
+            #[cfg(target_os = "windows")]
             Self::WindowsTaskScheduler => windows_disable(spec),
+            #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
             Self::Unsupported => unsupported_output(spec, false),
         }
     }
 }
 
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn unsupported_output(spec: &ScheduleSpec, ok: bool) -> Result<SyncScheduleOutput> {
     Ok(output(
         spec,
@@ -173,6 +208,7 @@ fn quiet_status(command: &mut Command) -> std::io::Result<ExitStatus> {
     command.stdout(Stdio::null()).stderr(Stdio::null()).status()
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn quiet_success(command: &mut Command) -> bool {
     quiet_status(command)
         .map(|status| status.success())
@@ -192,11 +228,7 @@ fn macos_plist_path() -> Result<PathBuf> {
         .join(format!("{JOB_ID}.plist")))
 }
 
-#[cfg(not(target_os = "macos"))]
-fn macos_plist_path() -> Result<PathBuf> {
-    Ok(PathBuf::from(format!("{JOB_ID}.plist")))
-}
-
+#[cfg(target_os = "macos")]
 fn macos_enable(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     let path = macos_plist_path()?;
     let interval = enable_interval(spec);
@@ -234,6 +266,7 @@ fn macos_enable(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     Ok(output(spec, true, true, true, Some(path), None))
 }
 
+#[cfg(target_os = "macos")]
 fn macos_status(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     let path = macos_plist_path()?;
     let registered = path.exists();
@@ -245,6 +278,7 @@ fn macos_status(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     Ok(result)
 }
 
+#[cfg(target_os = "macos")]
 fn macos_disable(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     let path = macos_plist_path()?;
     let uid = crate::util::current_uid_string().context("failed to resolve current user ID")?;
@@ -259,6 +293,7 @@ fn macos_disable(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     Ok(output(spec, true, false, false, Some(path), None))
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn render_launchd_plist(
     interval_minutes: u32,
     command: &[String],
@@ -300,6 +335,7 @@ fn render_launchd_plist(
     )
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn read_launchd_interval_minutes(path: &Path) -> Option<u32> {
     let contents = fs::read_to_string(path).ok()?;
     let marker = "<key>StartInterval</key>";
@@ -319,11 +355,7 @@ fn systemd_user_dir() -> Result<PathBuf> {
     Ok(home.join(".config").join("systemd").join("user"))
 }
 
-#[cfg(not(target_os = "linux"))]
-fn systemd_user_dir() -> Result<PathBuf> {
-    Ok(PathBuf::from("systemd-user"))
-}
-
+#[cfg(target_os = "linux")]
 fn linux_enable(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     let dir = systemd_user_dir()?;
     fs::create_dir_all(&dir).context("failed to create systemd user directory")?;
@@ -338,6 +370,7 @@ fn linux_enable(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     Ok(output(spec, true, true, true, Some(timer_path), None))
 }
 
+#[cfg(target_os = "linux")]
 fn linux_status(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     let timer_path = systemd_user_dir()?.join(SYSTEMD_TIMER_NAME);
     let registered = timer_path.exists();
@@ -359,6 +392,7 @@ fn linux_status(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     Ok(result)
 }
 
+#[cfg(target_os = "linux")]
 fn linux_disable(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     let dir = systemd_user_dir()?;
     let service_path = dir.join(SYSTEMD_UNIT_NAME);
@@ -379,6 +413,7 @@ fn linux_disable(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     Ok(output(spec, true, false, false, Some(timer_path), None))
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn render_systemd_service(command: &[String]) -> String {
     format!(
         "[Unit]\nDescription=Day One CLI sync\n\n[Service]\nType=oneshot\nExecStart={}\n",
@@ -386,12 +421,14 @@ fn render_systemd_service(command: &[String]) -> String {
     )
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn render_systemd_timer(interval_minutes: u32) -> String {
     format!(
         "[Unit]\nDescription=Run Day One CLI sync every {interval_minutes} minutes\n\n[Timer]\nOnBootSec=1min\nOnUnitActiveSec={interval_minutes}min\nUnit={SYSTEMD_UNIT_NAME}\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n"
     )
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn read_systemd_interval_minutes(path: &Path) -> Option<u32> {
     let contents = fs::read_to_string(path).ok()?;
     contents.lines().find_map(|line| {
@@ -400,6 +437,7 @@ fn read_systemd_interval_minutes(path: &Path) -> Option<u32> {
     })
 }
 
+#[cfg(target_os = "linux")]
 fn run_systemctl(args: &[&str]) -> Result<()> {
     let status = quiet_status(Command::new("systemctl").args(args))
         .with_context(|| format!("failed to run systemctl {}", args.join(" ")))?;
@@ -412,6 +450,7 @@ fn run_systemctl(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
 fn windows_enable(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     let interval = enable_interval(spec);
     let command = &spec.command[0];
@@ -435,6 +474,7 @@ fn windows_enable(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     Ok(output(spec, true, true, true, None, None))
 }
 
+#[cfg(target_os = "windows")]
 fn windows_status(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     let query = Command::new("schtasks.exe")
         .args(["/Query", "/TN", WINDOWS_TASK_NAME, "/XML"])
@@ -450,6 +490,7 @@ fn windows_status(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     Ok(result)
 }
 
+#[cfg(target_os = "windows")]
 fn windows_disable(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     ignore_quiet_status(Command::new("schtasks.exe").args([
         "/Delete",
@@ -460,12 +501,14 @@ fn windows_disable(spec: &ScheduleSpec) -> Result<SyncScheduleOutput> {
     Ok(output(spec, true, false, false, None, None))
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn read_windows_interval_minutes(xml: &str) -> Option<u32> {
     let start = xml.find("<Interval>PT")? + "<Interval>PT".len();
     let end = xml[start..].find("M</Interval>")? + start;
     xml[start..end].parse().ok()
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -475,6 +518,7 @@ fn xml_escape(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn systemd_escape_command(command: &[String]) -> String {
     command
         .iter()
@@ -496,6 +540,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn selects_native_scheduler_backend() {
+        let expected = match std::env::consts::OS {
+            "macos" => "launchd",
+            "linux" => "systemd-user",
+            "windows" => "windows-task-scheduler",
+            _ => "unsupported",
+        };
+        assert_eq!(Backend::current().name(), expected);
+    }
+
+    #[test]
+    fn schedule_spec_preserves_profile_and_api_host() {
+        let spec = ScheduleSpec::new(
+            SyncScheduleArgs {
+                config_dir: PathBuf::from("config directory"),
+                profile_name: "custom profile".to_owned(),
+                base_url: "https://example.invalid".to_owned(),
+            },
+            Some(30),
+        )
+        .expect("schedule specification");
+
+        assert_eq!(spec.backend.name(), Backend::current().name());
+        assert_eq!(spec.config_dir, PathBuf::from("config directory"));
+        assert_eq!(spec.interval_minutes, Some(30));
+        assert_eq!(
+            spec.command[0],
+            std::env::current_exe()
+                .expect("test executable")
+                .to_string_lossy()
+        );
+        assert_eq!(
+            &spec.command[1..],
+            [
+                "--profile",
+                "custom profile",
+                "--api-host",
+                "https://example.invalid",
+                "sync"
+            ]
+        );
+    }
+
+    #[test]
     fn launchd_plist_contains_interval_and_arguments() {
         let plist = render_launchd_plist(
             30,
@@ -506,6 +594,26 @@ mod tests {
         assert!(plist.contains("<integer>1800</integer>"));
         assert!(plist.contains("<string>/bin/dayone</string>"));
         assert!(plist.contains("<string>sync</string>"));
+    }
+
+    #[test]
+    fn reads_launchd_interval_from_plist() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("sync.plist");
+        let plist = render_launchd_plist(
+            45,
+            &["dayone".to_owned(), "sync".to_owned()],
+            Path::new("out.log"),
+            Path::new("err.log"),
+        );
+        fs::write(&path, plist).expect("write plist");
+        assert_eq!(read_launchd_interval_minutes(&path), Some(45));
+    }
+
+    #[test]
+    fn systemd_service_contains_sync_command() {
+        let service = render_systemd_service(&["dayone".to_owned(), "sync".to_owned()]);
+        assert!(service.contains("ExecStart=dayone sync\n"));
     }
 
     #[test]
