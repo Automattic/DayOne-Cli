@@ -327,7 +327,7 @@ fn rich_text_json_contains_table(raw: &str) -> bool {
     })
 }
 
-fn ensure_entry_features_supported(entry: &Value) -> Result<()> {
+pub(crate) fn ensure_entry_features_supported(entry: &Value) -> Result<()> {
     let Some(value) = entry.get("featureFlags").filter(|value| !value.is_null()) else {
         return Ok(());
     };

@@ -255,7 +255,8 @@ impl Store {
         payload_json: &str,
         next_attempt_epoch_ms: i64,
     ) -> StoreResult<()> {
-        self.enqueue_outbox_item_with_policy(
+        Self::enqueue_outbox_item_with_policy(
+            &self.connect()?,
             id,
             resource,
             operation,
@@ -276,7 +277,8 @@ impl Store {
         payload_json: &str,
         next_attempt_epoch_ms: i64,
     ) -> StoreResult<bool> {
-        self.enqueue_outbox_item_with_policy(
+        Self::enqueue_outbox_item_with_policy(
+            &self.connect()?,
             id,
             resource,
             operation,
@@ -298,8 +300,8 @@ impl Store {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn enqueue_outbox_item_with_policy(
-        &self,
+    pub(crate) fn enqueue_outbox_item_with_policy(
+        conn: &rusqlite::Connection,
         id: &str,
         resource: &str,
         operation: &str,
@@ -308,7 +310,6 @@ impl Store {
         next_attempt_epoch_ms: i64,
         retry_failed: bool,
     ) -> StoreResult<bool> {
-        let conn = self.connect()?;
         let changed = conn.execute(
             r#"
             INSERT INTO sync_outbox (
