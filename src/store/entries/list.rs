@@ -90,21 +90,24 @@ impl Store {
             })
             .transpose()?;
         let cursor_id = cursor_key.as_ref().map(|key| key.id.as_str());
-        // Note: we return raw `data_json` rather than calling `rebuild_entry_content`.
-        // Normalization happens at write time in `upsert_entry_json_row`, so data_json
-        // is already in the canonical shape for all entries written through Rust code.
+        // Overlay row timestamps on the stored content so metadata stays current
+        // even when data_json omits it or contains an older value.
         let sql = format!(
             r#"
             WITH entries_with_sort AS (
               SELECT
                 data_json,
                 id,
+                updated_at,
+                user_edit_date,
                 ({sort_key_expr}) AS sort_key
               FROM entries
               WHERE journal_id = :journal_id AND is_deleted = 0
             )
             SELECT
-              data_json,
+              json_set(data_json,
+                '$.updated_at', updated_at,
+                '$.user_edit_date', user_edit_date),
               CAST(sort_key AS TEXT) AS updated_at_key,
               id
             FROM entries_with_sort
