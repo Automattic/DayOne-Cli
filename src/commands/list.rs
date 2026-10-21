@@ -362,6 +362,98 @@ mod tests {
     }
 
     #[test]
+    fn entries_expose_stored_timestamps_for_backdated_edits() {
+        let dir = tempfile::tempdir().expect("tempdir should create");
+        let store = Store::open_at(dir.path().join("dayone.db")).expect("store should open");
+        for (id, date, edit_date, updated_at) in [
+            (
+                "backdated",
+                1000,
+                Some("1772409600000"),
+                Some("2026-03-03T00:00:00.000Z"),
+            ),
+            (
+                "recent",
+                2000,
+                Some("2026-03-01T00:00:00.000Z"),
+                Some("2026-03-04T00:00:00.000Z"),
+            ),
+            ("undated", 3000, None, None),
+        ] {
+            store
+                .upsert_entry_json_row_with_edit_date(
+                    id,
+                    "journal-1",
+                    edit_date,
+                    updated_at,
+                    None,
+                    &serde_json::json!({
+                        "id": id,
+                        "date": date,
+                        "body": "Unchanged body",
+                    })
+                    .to_string(),
+                )
+                .expect("entry should save");
+        }
+
+        let fields = vec![
+            "id".to_owned(),
+            "updated_at".to_owned(),
+            "user_edit_date".to_owned(),
+        ];
+        for projection in [None, Some(fields.as_slice())] {
+            let first = entries_by_journal_id(
+                &store,
+                "journal-1",
+                PaginationInput {
+                    limit: Some(2),
+                    ..Default::default()
+                },
+                EntryListSort::Desc,
+                EntryListSortMethod::EditDate,
+                projection,
+            )
+            .expect("first page should list");
+            assert_eq!(first.count, 2);
+            assert_eq!(first.items[0]["id"], "backdated");
+            assert_eq!(first.items[0]["user_edit_date"], "1772409600000");
+            assert_eq!(first.items[0]["updated_at"], "2026-03-03T00:00:00.000Z");
+            assert_eq!(first.items[1]["id"], "recent");
+            assert_eq!(first.items[1]["user_edit_date"], "2026-03-01T00:00:00.000Z");
+            assert_eq!(first.items[1]["updated_at"], "2026-03-04T00:00:00.000Z");
+            if projection.is_none() {
+                assert_eq!(first.items[0]["date"], 1000);
+                assert_eq!(first.items[0]["body"], "Unchanged body");
+            } else {
+                assert_eq!(first.items[0].as_object().expect("object").len(), 3);
+            }
+            assert!(first.has_more);
+            let cursor = first.next_cursor.expect("next cursor should exist");
+
+            let second = entries_by_journal_id(
+                &store,
+                "journal-1",
+                PaginationInput {
+                    limit: Some(2),
+                    cursor: Some(cursor),
+                    ..Default::default()
+                },
+                EntryListSort::Desc,
+                EntryListSortMethod::EditDate,
+                projection,
+            )
+            .expect("second page should list");
+            assert_eq!(second.count, 1);
+            assert_eq!(second.items[0]["id"], "undated");
+            assert_eq!(second.items[0].get("updated_at"), Some(&Value::Null));
+            assert_eq!(second.items[0].get("user_edit_date"), Some(&Value::Null));
+            assert!(!second.has_more);
+            assert!(second.next_cursor.is_none());
+        }
+    }
+
+    #[test]
     fn entries_output_includes_pagination_metadata() {
         let path = test_store_path("entries-pagination-metadata");
         let store = Store::open_at(&path).expect("store should open");
