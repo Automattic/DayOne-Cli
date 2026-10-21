@@ -162,6 +162,7 @@ struct ProfileSetCliArgs {
 enum EntrySubcommand {
     Write(EntryWriteCliArgs),
     /// Fetch a single entry from the local store as full JSON. No network.
+    #[command(visible_alias = "get")]
     Read(EntryReadCliArgs),
     Delete(EntryDeleteCliArgs),
 }
@@ -427,8 +428,9 @@ struct EntryWriteCliArgs {
 
 #[derive(Debug, Args)]
 struct EntryReadCliArgs {
+    /// Require the entry to belong to this journal.
     #[arg(long)]
-    journal_id: String,
+    journal_id: Option<String>,
 
     #[arg(long)]
     entry_id: String,
@@ -2306,18 +2308,12 @@ mod tests {
     }
 
     #[test]
-    fn entry_read_requires_both_journal_and_entry_id() {
+    fn entry_read_requires_entry_id() {
         let missing_entry_id =
             Cli::try_parse_from(["dayone", "entry", "read", "--journal-id", "journal-1"]);
         assert!(
             missing_entry_id.is_err(),
             "entry read should fail without --entry-id"
-        );
-        let missing_journal_id =
-            Cli::try_parse_from(["dayone", "entry", "read", "--entry-id", "entry-1"]);
-        assert!(
-            missing_journal_id.is_err(),
-            "entry read should fail without --journal-id"
         );
     }
 

@@ -158,9 +158,11 @@ dayone entry write --journal-id <journal-id> --body "My new entry"
 Read or update an existing entry:
 
 ```bash
-dayone entry read --journal-id <journal-id> --entry-id <entry-id>
+dayone entry read --entry-id <entry-id>
 dayone entry write --journal-id <journal-id> --entry-id <entry-id> --body "Updated body"
 ```
+
+`entry read` (alias `entry get`) returns local entry content, tags, and the journal ID as JSON. It does not contact the server. Run `dayone sync` first to fetch remote entries. Add `--journal-id <journal-id>` to require a specific journal.
 
 Writes are local-first: they update the profile's SQLite store and queue an outbox item. Run `dayone sync` (or enable `sync-schedule`) to send them to Day One.
 
