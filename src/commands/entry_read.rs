@@ -8,7 +8,7 @@ use crate::util::normalize_entry_id;
 
 #[derive(Debug, Clone)]
 pub struct EntryReadArgs {
-    pub journal_id: String,
+    pub journal_id: Option<String>,
     pub entry_id: String,
 }
 
@@ -28,8 +28,8 @@ pub struct EntryReadOutput {
 
 /// Local single-entry fetch from the SQLite store. No network access.
 pub fn execute(store: &Store, args: EntryReadArgs) -> Result<EntryReadOutput> {
-    let journal_id = args.journal_id.trim().to_owned();
-    if journal_id.is_empty() {
+    let journal_id = args.journal_id.as_deref().map(str::trim);
+    if journal_id == Some("") {
         bail!("journal_id must not be empty");
     }
     let entry_id = normalize_entry_id(&args.entry_id);
@@ -43,7 +43,9 @@ pub fn execute(store: &Store, args: EntryReadArgs) -> Result<EntryReadOutput> {
             entry_id
         )
     })?;
-    if record.journal_id != journal_id {
+    if let Some(journal_id) = journal_id
+        && record.journal_id != journal_id
+    {
         bail!(
             "entry '{}' belongs to journal '{}', not '{}'",
             entry_id,
@@ -58,7 +60,7 @@ pub fn execute(store: &Store, args: EntryReadArgs) -> Result<EntryReadOutput> {
 
     Ok(EntryReadOutput {
         ok: true,
-        journal_id,
+        journal_id: record.journal_id,
         entry_id,
         updated_at: record.updated_at,
         user_edit_date: record.user_edit_date,
@@ -103,7 +105,7 @@ mod tests {
         let out = execute(
             &store,
             EntryReadArgs {
-                journal_id: "journal-1".to_owned(),
+                journal_id: Some("journal-1".to_owned()),
                 entry_id: "entry-1".to_owned(),
             },
         )
@@ -130,7 +132,7 @@ mod tests {
         let err = execute(
             &store,
             EntryReadArgs {
-                journal_id: "journal-1".to_owned(),
+                journal_id: Some("journal-1".to_owned()),
                 entry_id: "missing".to_owned(),
             },
         )
@@ -154,7 +156,7 @@ mod tests {
         let err = execute(
             &store,
             EntryReadArgs {
-                journal_id: "journal-2".to_owned(),
+                journal_id: Some("journal-2".to_owned()),
                 entry_id: "entry-1".to_owned(),
             },
         )
@@ -178,7 +180,7 @@ mod tests {
         let out = execute(
             &store,
             EntryReadArgs {
-                journal_id: "journal-1".to_owned(),
+                journal_id: Some("journal-1".to_owned()),
                 entry_id: "a65afa22b98a0dec62eaad3cd1ccf45d".to_owned(),
             },
         )
