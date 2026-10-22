@@ -149,6 +149,13 @@ pub fn classify_error(error: &(dyn StdError + 'static)) -> SafeError {
                 ..SafeError::category("http")
             };
         }
+        if let Some(invitation) = cause.downcast_ref::<crate::http::invitation::InvitationError>() {
+            return SafeError::category(match invitation {
+                crate::http::invitation::InvitationError::Response => "serialization",
+                crate::http::invitation::InvitationError::Transport => "http",
+                crate::http::invitation::InvitationError::Client => "internal",
+            });
+        }
         if let Some(reqwest) = cause.downcast_ref::<reqwest::Error>() {
             return SafeError {
                 category: "http",
