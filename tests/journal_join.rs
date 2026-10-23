@@ -40,7 +40,7 @@ fn invitation_stdin_and_positional_inputs_dispatch_and_return_json() {
     listener.set_nonblocking(true).unwrap();
     let base = format!("http://{address}");
     let link = format!(
-        "https://{address}/accept-journal-invite?token=cli-test-invite#BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="
+        "https://{address}/accept-journal-invite?token=cli..test-invite#BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="
     );
     let fixture: Value =
         serde_json::from_str(include_str!("fixtures/shared-journal-invitation.json")).unwrap();
@@ -117,7 +117,7 @@ fn invitation_stdin_and_positional_inputs_dispatch_and_return_json() {
                 request.extend_from_slice(&bytes[..count]);
             }
             let request = String::from_utf8(request).unwrap();
-            assert!(request.starts_with("GET /api/shares/invite/cli-test-invite HTTP/1.1"));
+            assert!(request.starts_with("GET /api/shares/invite/cli..test-invite HTTP/1.1"));
             assert!(
                 request
                     .to_ascii_lowercase()
@@ -148,19 +148,37 @@ fn invitation_stdin_and_positional_inputs_dispatch_and_return_json() {
         assert_eq!(value["ok"], true);
         assert_eq!(value["journal_id"], "shared-journal-id");
         assert_eq!(value["status"], "already_member");
-        assert!(!String::from_utf8_lossy(&output.stdout).contains("cli-test-invite"));
-        assert!(!String::from_utf8_lossy(&output.stderr).contains("cli-test-invite"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("cli..test-invite"));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("cli..test-invite"));
     }
     server.join().unwrap();
-    for input in ["\n", "invalid-private-invitation-token#private-key\n"] {
+    // A token made only of dots would be folded by URL parsing into a
+    // different request path, so it must be rejected before any request.
+    let dot_only_link = format!(
+        "https://{address}/accept-journal-invite?token=..#BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\n"
+    );
+    for input in [
+        "\n",
+        "invalid-private-invitation-token#private-key\n",
+        dot_only_link.as_str(),
+    ] {
         let output = run(
             config.path(),
-            &["--profile", "fixture", "journal", "join", "--link-stdin"],
+            &[
+                "--profile",
+                "fixture",
+                "--api-host",
+                base.as_str(),
+                "journal",
+                "join",
+                "--link-stdin",
+            ],
             Some(input),
         );
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
         assert!(!String::from_utf8_lossy(&output.stderr).contains("private-invitation-token"));
         assert!(!String::from_utf8_lossy(&output.stderr).contains("private-key"));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("BwcHBwcH"));
     }
 }

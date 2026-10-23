@@ -57,6 +57,12 @@ impl Invitation {
             tokens.len() == 1 && !tokens[0].1.trim().is_empty(),
             invalid()
         );
+        // A token of only dots would never reach the server as written: `.` and
+        // `..` are complete dot segments, which URL parsing folds away (the
+        // fetch for `/api/shares/invite/..` is sent as `GET /api/shares/`).
+        // Percent-encoding cannot rescue it because the parser also folds
+        // `%2e` spellings, so reject the value outright.
+        ensure!(!tokens[0].1.trim_matches('.').is_empty(), invalid());
         let fragment = url.fragment().ok_or_else(invalid)?;
         let key = BASE64
             .decode(percent_encoding::percent_decode_str(fragment).collect::<Vec<_>>())
@@ -349,6 +355,17 @@ mod tests {
         assert_eq!(invitation.token, "a+b/c");
         assert_eq!(invitation.key, [251; 32]);
         assert_eq!(Invitation::parse(&link(), BASE).unwrap().key, KEY);
+        // Interior dots are ordinary token characters and must survive verbatim;
+        // only values made entirely of dots are rejected.
+        let dotted = Invitation::parse(
+            &format!(
+                "{BASE}/accept-journal-invite?token=a..b#{}",
+                BASE64.encode(KEY)
+            ),
+            BASE,
+        )
+        .unwrap();
+        assert_eq!(dotted.token, "a..b");
     }
 
     #[test]
@@ -361,6 +378,9 @@ mod tests {
             link().split('#').next().unwrap().to_owned(),
             link().replace("?token=", "?other="),
             link().replace("?token=", "?token=duplicate&token="),
+            link().replace(TOKEN, ".."),
+            link().replace(TOKEN, "."),
+            link().replace(TOKEN, "%2E%2E"),
             link().replace(&BASE64.encode(KEY), "short"),
             link().replace(&BASE64.encode(KEY), &BASE64.encode([0_u8; 16])),
             link().replace(&BASE64.encode(KEY), &BASE64.encode([0_u8; 31])),
