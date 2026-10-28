@@ -761,14 +761,21 @@ fn scale_dimensions_within_bounds(width: u32, height: u32, max_dimension: u32) -
 }
 
 fn derive_image_metadata(path: &Path) -> Result<AttachmentDerivedMetadata> {
-    let (width, height) = image::image_dimensions(path)
+    let mut decoder = image::ImageReader::open(path)
+        .with_context(|| format!("failed to open image attachment '{}'", path.display()))?
+        .into_decoder()
         .with_context(|| format!("failed to read image dimensions for '{}'", path.display()))?;
+    let (width, height) = decoder.dimensions();
     validate_image_dimensions(width, height)?;
 
-    // `image::open` is more tolerant across common PNG/JPEG/WebP fixtures than
-    // manually guessing formats via `ImageReader`, which can fail and skip thumbs.
-    let image = image::open(path)
+    let orientation = decoder
+        .orientation()
+        .with_context(|| format!("failed to read image orientation for '{}'", path.display()))?;
+    let mut image = DynamicImage::from_decoder(decoder)
         .with_context(|| format!("failed to decode image attachment '{}'", path.display()))?;
+    // Thumbnails have no EXIF tag, so apply orientation to their pixels.
+    image.apply_orientation(orientation);
+    let (width, height) = image.dimensions();
     let thumbnail_image = image.thumbnail(THUMBNAIL_MAX_DIMENSION, THUMBNAIL_MAX_DIMENSION);
     let thumbnail_bytes = encode_thumbnail_jpeg(&thumbnail_image)
         .with_context(|| format!("failed to encode thumbnail for '{}'", path.display()))?;
@@ -991,6 +998,90 @@ mod tests {
         assert!(!thumbnail.md5.is_empty());
         assert!(!thumbnail.bytes.is_empty());
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn stage_attachments_applies_exif_orientation_without_changing_original() {
+        let dir = tempfile::tempdir().expect("temp directory should create");
+        let colors = [[220, 30, 30], [30, 180, 30], [30, 30, 220], [220, 200, 30]];
+        let image = RgbImage::from_fn(96, 64, |x, y| {
+            Rgb(colors[usize::from(x >= 48) + 2 * usize::from(y >= 32)])
+        });
+        let mut jpeg = Vec::new();
+        JpegEncoder::new_with_quality(&mut jpeg, 95)
+            .encode(&image, 96, 64, image::ColorType::Rgb8.into())
+            .expect("fixture JPEG should encode");
+
+        for orientation in 0..=8 {
+            let mut bytes = jpeg[..2].to_vec();
+            if orientation != 0 {
+                // Minimal little-endian EXIF with one Orientation entry.
+                bytes.extend_from_slice(
+                    b"\xff\xe1\0\x22Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0",
+                );
+                bytes.extend_from_slice(&[orientation, 0, 0, 0, 0, 0, 0, 0]);
+            }
+            bytes.extend_from_slice(&jpeg[2..]);
+            let path = dir.path().join(format!("orientation-{orientation}.jpg"));
+            fs::write(&path, &bytes).expect("fixture should write");
+
+            let staged = stage_attachments(std::slice::from_ref(&path), &[MediaType::Image])
+                .expect("attachment staging should succeed");
+            let attachment = &staged[0];
+            let expected_dimensions = if orientation >= 5 { (64, 96) } else { (96, 64) };
+            assert_eq!(
+                (attachment.width, attachment.height),
+                (Some(expected_dimensions.0), Some(expected_dimensions.1)),
+                "display dimensions for EXIF {orientation}"
+            );
+            let thumbnail = attachment
+                .thumbnail
+                .as_ref()
+                .expect("thumbnail should exist");
+            let decoded = image::load_from_memory(&thumbnail.bytes)
+                .expect("thumbnail should decode")
+                .to_rgb8();
+            let (width, height) = decoded.dimensions();
+            assert_eq!(
+                (thumbnail.width, thumbnail.height),
+                (i64::from(width), i64::from(height))
+            );
+            assert_eq!(
+                width > height,
+                orientation < 5,
+                "thumbnail shape for EXIF {orientation}"
+            );
+            // Expected quadrants in top-left, top-right, bottom-left, bottom-right order.
+            let expected_corners = match orientation {
+                0 | 1 => [0, 1, 2, 3],
+                2 => [1, 0, 3, 2],
+                3 => [3, 2, 1, 0],
+                4 => [2, 3, 0, 1],
+                5 => [0, 2, 1, 3],
+                6 => [2, 0, 3, 1],
+                7 => [3, 1, 2, 0],
+                8 => [1, 3, 0, 2],
+                _ => unreachable!(),
+            };
+            let positions = [
+                (width / 4, height / 4),
+                (3 * width / 4, height / 4),
+                (width / 4, 3 * height / 4),
+                (3 * width / 4, 3 * height / 4),
+            ];
+            for ((x, y), corner) in positions.into_iter().zip(expected_corners) {
+                let actual = decoded.get_pixel(x, y).0;
+                assert!(
+                    actual
+                        .into_iter()
+                        .zip(colors[corner])
+                        .all(|(a, b)| a.abs_diff(b) < 16),
+                    "thumbnail pixel at ({x}, {y}) for EXIF {orientation}: {actual:?}"
+                );
+            }
+            assert_eq!(fs::read(&path).expect("original should read"), bytes);
+            assert_eq!(attachment.md5_body, format!("{:x}", Md5::digest(&bytes)));
+        }
     }
 
     #[test]
