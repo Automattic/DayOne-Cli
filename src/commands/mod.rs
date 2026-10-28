@@ -9,6 +9,7 @@ pub mod doctor;
 pub mod embeddings;
 pub mod entry_delete;
 pub mod entry_read;
+pub mod entry_tag;
 pub mod entry_write;
 pub mod journal_create;
 pub mod journal_join;

@@ -158,11 +158,31 @@ dayone entry write --journal-id <journal-id> --body "My new entry"
 Read or update an existing entry:
 
 ```bash
-dayone entry read --journal-id <journal-id> --entry-id <entry-id>
+dayone entry read --entry-id <entry-id>
 dayone entry write --journal-id <journal-id> --entry-id <entry-id> --body "Updated body"
 ```
 
+`entry read` (alias `entry get`) returns local entry content, tags, and the journal ID as JSON. It does not contact the server. Run `dayone sync` first to fetch remote entries. Add `--journal-id <journal-id>` to require a specific journal.
+
 Writes are local-first: they update the profile's SQLite store and queue an outbox item. Run `dayone sync` (or enable `sync-schedule`) to send them to Day One.
+
+Add or remove tags without changes to entry text, rich text, or attachments:
+
+```bash
+dayone entry tag --entry-id <entry-id> --add travel --add family --remove work
+```
+
+The command finds the journal from the local entry. Add `--journal-id <journal-id>` to require a specific journal. Tag names use exact, case-sensitive matches. Additions preserve current tags and do not create duplicates. Removals occur after additions. Empty names are not permitted.
+
+Tag-only changes update the edit timestamps and queue sync locally. A repeated command with no tag changes returns `queued: false` and leaves edit timestamps unchanged. The command refuses edits to deleted entries or entries with unsupported features.
+
+Add tags with a new entry or a text update:
+
+```bash
+dayone entry write --journal-id <journal-id> --body "Trip notes" --tag travel --tag family
+```
+
+Each `--tag` adds a tag without replacement of current tags. To remove tags, use `entry tag --remove`.
 
 Write an all-day entry (time ignored on display):
 
@@ -215,6 +235,19 @@ dayone list entries --journal-id <journal-id> --fields id,date,tags,body
 `--fields` accepts a comma-separated list of top-level entry keys. When omitted, full entry objects are returned. Missing keys are returned as `null`.
 
 `--sort-method` accepts `entryDate` or `editDate`. When omitted, the command follows the journal's `sort_method` (defaulting to `entryDate` if unavailable). For cursor pagination, reuse the same `--sort` and `--sort-method` values between pages; changing either can skip or duplicate entries.
+
+Full entry output includes `updated_at` and `user_edit_date` from the local store. Both fields also work with `--fields`. They contain strings, or `null` when unavailable:
+
+- `updated_at` is the server update timestamp, or the local write timestamp before sync.
+- `user_edit_date` is the user edit timestamp that `--sort-method editDate` uses.
+
+The strings retain their stored format: RFC 3339 timestamps or Unix epoch milliseconds. These timestamps differ from `date`, which can refer to a backdated entry.
+
+After `dayone sync`, automation can inspect these fields for new or changed entries, regardless of the entry date:
+
+```bash
+dayone list entries --journal-id <journal-id> --sort-method editDate --fields id,date,updated_at,user_edit_date
+```
 
 Paginate entries with offset mode:
 

@@ -9,9 +9,9 @@ use std::time::Instant;
 
 use crate::commands::{
     auth_key_set, auth_login, auth_logout, auth_setup, comment, context_item_write, daily_chat_add,
-    doctor, embeddings, entry_delete, entry_read, entry_write, journal_create, journal_join,
-    journal_update, list, memory_process, outbox, profile, search, sync, sync_schedule,
-    user_settings_get,
+    doctor, embeddings, entry_delete, entry_read, entry_tag, entry_write, journal_create,
+    journal_join, journal_update, list, memory_process, outbox, profile, search, sync,
+    sync_schedule, user_settings_get,
 };
 use crate::config::AppConfig;
 use crate::http::normalize_base_url;
@@ -163,7 +163,10 @@ struct ProfileSetCliArgs {
 enum EntrySubcommand {
     Write(EntryWriteCliArgs),
     /// Fetch a single entry from the local store as full JSON. No network.
+    #[command(visible_alias = "get")]
     Read(EntryReadCliArgs),
+    /// Add or remove entry tags without changes to text. Queue sync locally.
+    Tag(EntryTagCliArgs),
     Delete(EntryDeleteCliArgs),
 }
 
@@ -440,15 +443,39 @@ struct EntryWriteCliArgs {
 
     #[arg(long = "attach-type", value_enum)]
     attachment_types: Vec<AttachmentTypeCli>,
+
+    /// Add a tag without replacement of current tags. Repeat for multiple tags.
+    #[arg(long = "tag")]
+    tags: Vec<String>,
 }
 
 #[derive(Debug, Args)]
 struct EntryReadCliArgs {
+    /// Require the entry to belong to this journal.
     #[arg(long)]
-    journal_id: String,
+    journal_id: Option<String>,
 
     #[arg(long)]
     entry_id: String,
+}
+
+#[derive(Debug, Args)]
+#[command(group(clap::ArgGroup::new("tag_changes").required(true).multiple(true).args(["add", "remove"])))]
+struct EntryTagCliArgs {
+    #[arg(long)]
+    entry_id: String,
+
+    /// Require the entry to belong to this journal.
+    #[arg(long)]
+    journal_id: Option<String>,
+
+    /// Add this exact tag name. Repeat for multiple tags.
+    #[arg(long)]
+    add: Vec<String>,
+
+    /// Remove this exact tag name, after additions. Repeat for multiple tags.
+    #[arg(long)]
+    remove: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1267,6 +1294,7 @@ async fn dispatch_entry(base_url: &str, entry_cmd: EntryCommand, store: &Store) 
                             }
                         })
                         .collect(),
+                    tags: args.tags,
                 },
             )
             .await?;
@@ -1288,6 +1316,19 @@ async fn dispatch_entry(base_url: &str, entry_cmd: EntryCommand, store: &Store) 
                 entry_read::EntryReadArgs {
                     journal_id: args.journal_id,
                     entry_id: args.entry_id,
+                },
+            )?;
+            print_json(&output)?;
+        }
+        EntrySubcommand::Tag(args) => {
+            let output = entry_tag::execute(
+                store,
+                base_url,
+                entry_tag::EntryTagArgs {
+                    journal_id: args.journal_id,
+                    entry_id: args.entry_id,
+                    add: args.add,
+                    remove: args.remove,
                 },
             )?;
             print_json(&output)?;
@@ -1785,6 +1826,7 @@ fn subcommand_label(command: &TopLevelCommand) -> Option<&'static str> {
         TopLevelCommand::Entry(cmd) => Some(match cmd.command {
             EntrySubcommand::Write(_) => "write",
             EntrySubcommand::Read(_) => "read",
+            EntrySubcommand::Tag(_) => "tag",
             EntrySubcommand::Delete(_) => "delete",
         }),
         TopLevelCommand::Embeddings(cmd) => Some(match cmd.command {
@@ -2344,18 +2386,12 @@ mod tests {
     }
 
     #[test]
-    fn entry_read_requires_both_journal_and_entry_id() {
+    fn entry_read_requires_entry_id() {
         let missing_entry_id =
             Cli::try_parse_from(["dayone", "entry", "read", "--journal-id", "journal-1"]);
         assert!(
             missing_entry_id.is_err(),
             "entry read should fail without --entry-id"
-        );
-        let missing_journal_id =
-            Cli::try_parse_from(["dayone", "entry", "read", "--entry-id", "entry-1"]);
-        assert!(
-            missing_journal_id.is_err(),
-            "entry read should fail without --journal-id"
         );
     }
 

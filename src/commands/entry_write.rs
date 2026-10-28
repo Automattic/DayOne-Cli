@@ -14,6 +14,7 @@ use crate::entry::body::{
     parse_requested_entry_date, read_body,
 };
 use crate::entry::persistence::{enqueue_entry_and_media_outbox, upsert_entry_attachments};
+use crate::entry::tags::updated_tags;
 use crate::store::sqlite::Store;
 use crate::util::now_rfc3339_utc;
 
@@ -27,6 +28,7 @@ pub struct EntryWriteArgs {
     pub all_day: bool,
     pub attachments: Vec<PathBuf>,
     pub attachment_types: Vec<MediaType>,
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -108,6 +110,9 @@ pub async fn execute(
         now_ms,
         &new_moments,
     )?;
+    if !args.tags.is_empty() {
+        entry_content["tags"] = serde_json::json!(updated_tags(&entry_content, &args.tags, &[])?);
+    }
     // Writing over a locally deleted entry is an undelete: any tombstone left
     // in the rebuilt content would later make sync flip the queued update back
     // into a delete.
@@ -193,6 +198,7 @@ mod tests {
             all_day: false,
             attachments: Vec::new(),
             attachment_types: Vec::new(),
+            tags: Vec::new(),
         }
     }
 

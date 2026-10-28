@@ -116,6 +116,307 @@ fn sample_pdf_bytes() -> Vec<u8> {
 }
 
 #[test]
+fn entry_tag_changes_preserve_content_and_queue_the_complete_entry() {
+    let config = tempfile::tempdir().unwrap();
+    let journal_id = "j-tags";
+    let entry_id = "A65AFA22B98A0DEC62EAAD3CD1CCF45D";
+    seed_local_auth_and_journal(config.path(), journal_id);
+    let conn = Connection::open(staging_db_path(config.path())).unwrap();
+    let original = serde_json::json!({
+        "id": entry_id,
+        "date": 1742169600000_f64,
+        "title": "Original title",
+        "body": "Original **text**\n\n![](dayone-moment://m1)",
+        "richTextJSON": "{ \"contents\": [{\"text\":\"Original text\"}] }",
+        "tags": ["keep", "remove", "Travel"],
+        "moments": [{"id": "m1", "type": "photo"}],
+        "timeZone": "Asia/Makassar",
+        "clientMeta": {"source": "test-client"},
+        "location": {"city": "Makassar"},
+        "weather": {"temperatureCelsius": 29},
+        "customField": {"preserve": true}
+    });
+    conn.execute(
+        "INSERT INTO entries (id, journal_id, user_edit_date, updated_at, body, rich_text_json, tags_json, data_json)
+         VALUES (?1, ?2, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', ?3, ?4, ?5, ?6)",
+        params![entry_id, journal_id, original["body"].as_str(), original["richTextJSON"].as_str(), original["tags"].to_string(), original.to_string()],
+    ).unwrap();
+    conn.execute(
+        r#"INSERT INTO sync_outbox (id, resource, operation, object_id, payload_json, status, attempt_count, next_attempt_epoch_ms)
+         VALUES ('media-test', 'original_media', 'create', ?1, '{"moment_id":"m1"}', 'pending', 0, 0)"#,
+        [format!("{journal_id}:{entry_id}:m1")],
+    ).unwrap();
+
+    let args = [
+        "--profile",
+        "staging",
+        "entry",
+        "tag",
+        "--entry-id",
+        "a65afa22b98a0dec62eaad3cd1ccf45d",
+        "--add",
+        "new",
+        "--add",
+        "new",
+        "--add",
+        "travel",
+        "--remove",
+        "remove",
+    ];
+    let output: Value = serde_json::from_str(&run_dayone(config.path(), &args)).unwrap();
+    assert_eq!(output["journal_id"], journal_id);
+    assert_eq!(output["entry_id"], entry_id);
+    assert_eq!(output["queued"], true);
+    assert_eq!(output["synced"], false);
+    let mut expected = original.clone();
+    expected["tags"] = serde_json::json!(["keep", "Travel", "new", "travel"]);
+    assert_eq!(output["tags"], expected["tags"]);
+
+    let read = || -> (Value, String, String, String) {
+        conn.query_row(
+            "SELECT data_json, tags_json, user_edit_date, updated_at FROM entries WHERE id = ?1",
+            [entry_id],
+            |row| {
+                Ok((
+                    serde_json::from_str::<Value>(&row.get::<_, String>(0)?).unwrap(),
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                ))
+            },
+        )
+        .unwrap()
+    };
+    let after = read();
+    assert_eq!(after.0, expected);
+    assert_eq!(
+        serde_json::from_str::<Value>(&after.1).unwrap(),
+        expected["tags"]
+    );
+    assert_ne!(after.2, "2026-01-01T00:00:00Z");
+    assert_ne!(after.3, "2026-01-01T00:00:00Z");
+    let queued: String = conn.query_row(
+        "SELECT payload_json FROM sync_outbox WHERE id = ?1 AND operation = 'update' AND status = 'pending'",
+        [format!("entry:{journal_id}:{entry_id}")], |row| row.get(0),
+    ).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&queued).unwrap()["entry_json"],
+        expected
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM sync_outbox WHERE resource = 'original_media'",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+
+    let repeated: Value = serde_json::from_str(&run_dayone(config.path(), &args)).unwrap();
+    assert_eq!(repeated["queued"], false);
+    assert_eq!(
+        read(),
+        after,
+        "a repeated tag change must not change content or edit dates"
+    );
+
+    run_dayone(
+        config.path(),
+        &[
+            "--profile",
+            "staging",
+            "entry",
+            "tag",
+            "--entry-id",
+            entry_id,
+            "--remove",
+            "keep",
+            "--remove",
+            "Travel",
+            "--remove",
+            "new",
+            "--remove",
+            "travel",
+        ],
+    );
+    assert_eq!(read().0["tags"], serde_json::json!([]));
+}
+
+#[test]
+fn entry_write_tags_add_without_replacing_existing_tags() {
+    let config = tempfile::tempdir().unwrap();
+    seed_local_auth_and_journal(config.path(), "j-tags");
+    let output: Value = serde_json::from_str(&run_dayone(
+        config.path(),
+        &[
+            "--profile",
+            "staging",
+            "entry",
+            "write",
+            "--journal-id",
+            "j-tags",
+            "--body",
+            "New entry",
+            "--tag",
+            "first",
+            "--tag",
+            "first",
+            "--tag",
+            "Second",
+        ],
+    ))
+    .unwrap();
+    let entry_id = output["entry_id"].as_str().unwrap();
+    run_dayone(
+        config.path(),
+        &[
+            "--profile",
+            "staging",
+            "entry",
+            "write",
+            "--journal-id",
+            "j-tags",
+            "--entry-id",
+            entry_id,
+            "--body",
+            "Edited entry",
+            "--tag",
+            "third",
+        ],
+    );
+    let entry: Value = serde_json::from_str(&run_dayone(
+        config.path(),
+        &[
+            "--profile",
+            "staging",
+            "entry",
+            "read",
+            "--journal-id",
+            "j-tags",
+            "--entry-id",
+            entry_id,
+        ],
+    ))
+    .unwrap();
+    assert_eq!(
+        entry["entry"]["tags"],
+        serde_json::json!(["first", "Second", "third"])
+    );
+    assert_eq!(entry["entry"]["body"], "Edited entry");
+}
+
+#[test]
+fn entry_tag_rejects_unsafe_edits_and_rolls_back_if_queue_write_fails() {
+    let config = tempfile::tempdir().unwrap();
+    seed_local_auth_and_journal(config.path(), "j-tags");
+    let conn = Connection::open(staging_db_path(config.path())).unwrap();
+    let original = r#"{"id":"entry-1","body":"Unchanged text","tags":["before"]}"#;
+    conn.execute(
+        "INSERT INTO entries (id, journal_id, data_json) VALUES ('entry-1', 'j-tags', ?1)",
+        [original],
+    )
+    .unwrap();
+    let run = |entry_id: &str, extra: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_dayone"))
+            .env("DAYONE_CONFIG_DIR", config.path())
+            .env("DAYONE_TELEMETRY", "0")
+            .env("DO_NOT_TRACK", "1")
+            .args([
+                "--profile",
+                "staging",
+                "entry",
+                "tag",
+                "--entry-id",
+                entry_id,
+            ])
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+    for (extra, message) in [
+        (vec![], "--add"),
+        (
+            vec!["--add", "after", "--journal-id", "wrong-journal"],
+            "belongs to journal",
+        ),
+        (vec!["--add", "  "], "tag names must not be empty"),
+    ] {
+        let output = run("entry-1", &extra);
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(message),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let missing = run("missing", &["--add", "after"]);
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("not found locally"));
+    for (data, deleted, message) in [
+        (original.to_owned(), 1, "deleted entry"),
+        (
+            r#"{"body":"Unchanged text","featureFlags":"100"}"#.to_owned(),
+            0,
+            "unsupported feature flags",
+        ),
+        (
+            r#"{"body":"Unchanged text","tags":[3]}"#.to_owned(),
+            0,
+            "array of strings",
+        ),
+    ] {
+        conn.execute(
+            "UPDATE entries SET data_json = ?1, is_deleted = ?2 WHERE id = 'entry-1'",
+            params![data, deleted],
+        )
+        .unwrap();
+        let output = run("entry-1", &["--add", "after"]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains(message));
+        let saved: String = conn
+            .query_row(
+                "SELECT data_json FROM entries WHERE id = 'entry-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved, data);
+    }
+
+    conn.execute(
+        "UPDATE entries SET data_json = ?1, is_deleted = 0 WHERE id = 'entry-1'",
+        [original],
+    )
+    .unwrap();
+    conn.execute_batch("CREATE TRIGGER fail_queue BEFORE INSERT ON sync_outbox BEGIN SELECT RAISE(ABORT, 'queue unavailable'); END;").unwrap();
+    let output = run("entry-1", &["--add", "after"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("queue unavailable"));
+    let saved: (String, Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT data_json, tags_json, user_edit_date FROM entries WHERE id = 'entry-1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(saved, (original.to_owned(), None, None));
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM sync_outbox", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+
+    conn.execute_batch("DROP TRIGGER fail_queue;").unwrap();
+    let output: Value = serde_json::from_slice(
+        &run("entry-1", &["--add", "after", "--journal-id", "j-tags"]).stdout,
+    )
+    .unwrap();
+    assert_eq!(output["tags"], serde_json::json!(["before", "after"]));
+}
+
+#[test]
 fn entry_update_refuses_unsupported_feature_flags_without_queuing_changes() {
     let config_dir = unique_tmp_dir("feature-flags");
     let journal_id = "j-feature-flags";
