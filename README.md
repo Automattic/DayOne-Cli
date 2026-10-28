@@ -164,6 +164,24 @@ dayone entry write --journal-id <journal-id> --entry-id <entry-id> --body "Updat
 
 Writes are local-first: they update the profile's SQLite store and queue an outbox item. Run `dayone sync` (or enable `sync-schedule`) to send them to Day One.
 
+Add or remove tags without changes to entry text, rich text, or attachments:
+
+```bash
+dayone entry tag --entry-id <entry-id> --add travel --add family --remove work
+```
+
+The command finds the journal from the local entry. Add `--journal-id <journal-id>` to require a specific journal. Tag names use exact, case-sensitive matches. Additions preserve current tags and do not create duplicates. Removals occur after additions. Empty names are not permitted.
+
+Tag-only changes update the edit timestamps and queue sync locally. A repeated command with no tag changes returns `queued: false` and leaves edit timestamps unchanged. The command refuses edits to deleted entries or entries with unsupported features.
+
+Add tags with a new entry or a text update:
+
+```bash
+dayone entry write --journal-id <journal-id> --body "Trip notes" --tag travel --tag family
+```
+
+Each `--tag` adds a tag without replacement of current tags. To remove tags, use `entry tag --remove`.
+
 Write an all-day entry (time ignored on display):
 
 ```bash

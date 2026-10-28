@@ -1,8 +1,10 @@
-use rusqlite::{OptionalExtension, params};
-use serde_json::{Map, Value};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use crate::entry::body::ensure_entry_features_supported;
+use crate::entry::tags::updated_tags;
 use crate::store::sqlite::Store;
 use crate::store::{StoreError, StoreResult};
 
@@ -323,6 +325,95 @@ pub struct EntryRowRecord {
 }
 
 impl Store {
+    pub fn update_entry_tags_and_enqueue(
+        &self,
+        entry_id: &str,
+        journal_constraint: Option<&str>,
+        additions: &[String],
+        removals: &[String],
+    ) -> StoreResult<(String, Vec<String>, bool)> {
+        let mut conn = self.connect()?;
+        let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (journal_id, deleted, data_json, extra_fields_json): (String, bool, String, Option<String>) = transaction
+            .query_row(
+                "SELECT journal_id, is_deleted != 0 OR deleted_at IS NOT NULL, data_json, extra_fields_json FROM entries WHERE id = ?1",
+                [entry_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::invalid_input(format!(
+                "entry '{entry_id}' not found locally; run `dayone sync` first"
+            )))?;
+        if let Some(journal) = journal_constraint
+            && journal != journal_id
+        {
+            return Err(StoreError::invalid_input(format!(
+                "entry '{entry_id}' belongs to journal '{journal_id}', not '{journal}'"
+            )));
+        }
+        if deleted {
+            return Err(StoreError::invalid_input(
+                "cannot change tags on a deleted entry",
+            ));
+        }
+        let journal_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM journals WHERE id = ?1 AND is_deleted = 0)",
+            [&journal_id],
+            |row| row.get(0),
+        )?;
+        if !journal_exists {
+            return Err(StoreError::invalid_input(format!(
+                "journal '{journal_id}' not found locally; run `dayone sync` first"
+            )));
+        }
+
+        let mut local = parse_entry_data_json(&data_json)?;
+        let mut content = rebuild_entry_content(&local, extra_fields_json.as_deref(), entry_id);
+        ensure_entry_features_supported(&content)
+            .map_err(|error| StoreError::invalid_input(error.to_string()))?;
+        let tags = updated_tags(&content, additions, removals)?;
+        let tags_json = json!(tags);
+        let previous = content
+            .get("tags")
+            .filter(|tags| !tags.is_null())
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        let changed = tags_json != previous;
+        if changed {
+            let local_object = local.as_object_mut().ok_or_else(|| {
+                StoreError::invalid_input("entry data_json must be a JSON object")
+            })?;
+            local_object.insert("tags".to_owned(), tags_json.clone());
+            content["tags"] = tags_json;
+            let now_iso = crate::util::now_rfc3339_utc();
+            let now_ms = crate::entry::attachments::now_epoch_ms();
+            // Change only tags and edit dates. Preserve all text columns and extra fields.
+            transaction.execute(
+                "UPDATE entries SET tags_json = ?2, data_json = ?3, user_edit_date = ?4, updated_at = ?4 WHERE id = ?1",
+                params![entry_id, serde_json::to_string(&tags)?, local.to_string(), now_iso],
+            )?;
+            let payload = json!({
+                "journal_id": journal_id,
+                "entry_id": entry_id,
+                "entry_json": content,
+                "queued_at": now_iso,
+                "queued_at_epoch_ms": now_ms
+            });
+            Self::enqueue_outbox_item_with_policy(
+                &transaction,
+                &format!("entry:{journal_id}:{entry_id}"),
+                "entry",
+                "update",
+                &format!("{journal_id}:{entry_id}"),
+                &payload.to_string(),
+                now_ms,
+                true,
+            )?;
+        }
+        transaction.commit()?;
+        Ok((journal_id, tags, changed))
+    }
+
     pub fn get_entry_row_record(&self, id: &str) -> StoreResult<Option<EntryRowRecord>> {
         let conn = self.connect()?;
         conn.query_row(
