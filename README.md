@@ -234,6 +234,19 @@ dayone list entries --journal-id <journal-id> --fields id,date,tags,body
 
 `--sort-method` accepts `entryDate` or `editDate`. When omitted, the command follows the journal's `sort_method` (defaulting to `entryDate` if unavailable). For cursor pagination, reuse the same `--sort` and `--sort-method` values between pages; changing either can skip or duplicate entries.
 
+Full entry output includes `updated_at` and `user_edit_date` from the local store. Both fields also work with `--fields`. They contain strings, or `null` when unavailable:
+
+- `updated_at` is the server update timestamp, or the local write timestamp before sync.
+- `user_edit_date` is the user edit timestamp that `--sort-method editDate` uses.
+
+The strings retain their stored format: RFC 3339 timestamps or Unix epoch milliseconds. These timestamps differ from `date`, which can refer to a backdated entry.
+
+After `dayone sync`, automation can inspect these fields for new or changed entries, regardless of the entry date:
+
+```bash
+dayone list entries --journal-id <journal-id> --sort-method editDate --fields id,date,updated_at,user_edit_date
+```
+
 Paginate entries with offset mode:
 
 ```bash
