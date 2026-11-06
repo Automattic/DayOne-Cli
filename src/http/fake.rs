@@ -13,6 +13,7 @@ enum FakeResponse {
     JsonAllow304(Option<Value>),
     Bytes(Vec<u8>),
     Error(String),
+    HttpError(u16, String),
     PutAllow409((u16, Value)),
     PutJson(Value),
     DeleteJson(Value),
@@ -35,6 +36,7 @@ pub struct FakeApiClient {
     captured_post_json: Arc<RwLock<HashMap<String, Vec<Value>>>>,
     captured_put_json: Arc<RwLock<HashMap<String, Vec<Value>>>>,
     captured_uploads: Arc<RwLock<Vec<CapturedUpload>>>,
+    media_requests: Arc<RwLock<Vec<String>>>,
 }
 
 impl FakeApiClient {
@@ -162,6 +164,28 @@ impl DayOneApiClient for FakeApiClient {
         }
     }
 
+    async fn download_media(
+        &self,
+        journal_id: &str,
+        moment_id: &str,
+        thumbnail: bool,
+    ) -> Result<Option<Vec<u8>>> {
+        let key = format!(
+            "DOWNLOAD_MEDIA {journal_id}/{moment_id}/{}",
+            if thumbnail { "thumbnail" } else { "original" }
+        );
+        self.media_requests.write().await.push(key.clone());
+        match self.response_for(&key).await? {
+            FakeResponse::Bytes(value) => Ok(Some(value)),
+            FakeResponse::Unit => Ok(None),
+            FakeResponse::Error(message) => Err(anyhow!(message)),
+            FakeResponse::HttpError(status, message) => {
+                Err(ApiError::new(status, "", message).into())
+            }
+            other => bail!("fixture type mismatch for key '{key}': got {other:?}"),
+        }
+    }
+
     async fn put_file_to_absolute_url(
         &self,
         url: &str,
@@ -280,6 +304,48 @@ impl FakeApiClient {
     pub async fn with_unit_fixture(self, key: impl Into<String>) -> Self {
         self.insert(key.into(), FakeResponse::Unit).await;
         self
+    }
+
+    /// Registers the next `download_media` answer for a moment: `Some(bytes)`
+    /// is a successful download, `None` is a 404.
+    pub async fn with_media_fixture(
+        self,
+        journal_id: &str,
+        moment_id: &str,
+        thumbnail: bool,
+        bytes: Option<Vec<u8>>,
+    ) -> Self {
+        let key = format!(
+            "DOWNLOAD_MEDIA {journal_id}/{moment_id}/{}",
+            if thumbnail { "thumbnail" } else { "original" }
+        );
+        let response = match bytes {
+            Some(bytes) => FakeResponse::Bytes(bytes),
+            None => FakeResponse::Unit,
+        };
+        self.insert(key, response).await;
+        self
+    }
+
+    /// Registers a failing `download_media` answer with an HTTP status.
+    pub async fn with_media_http_error(
+        self,
+        journal_id: &str,
+        moment_id: &str,
+        thumbnail: bool,
+        status: u16,
+    ) -> Self {
+        let key = format!(
+            "DOWNLOAD_MEDIA {journal_id}/{moment_id}/{}",
+            if thumbnail { "thumbnail" } else { "original" }
+        );
+        self.insert(key, FakeResponse::HttpError(status, "error".to_owned()))
+            .await;
+        self
+    }
+
+    pub async fn media_requests(&self) -> Vec<String> {
+        self.media_requests.read().await.clone()
     }
 
     pub async fn captured_uploads(&self) -> Vec<CapturedUpload> {

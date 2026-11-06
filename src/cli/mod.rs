@@ -757,6 +757,37 @@ struct SearchEntriesCliArgs {
 struct SyncCliArgs {
     #[arg(long, default_value_t = false)]
     ignore_cursors: bool,
+    /// Also download media (photos, videos, audio, PDFs) for synced entries into
+    /// the profile directory, decrypting end-to-end encrypted journals locally.
+    /// Opt-in; plain `sync` never downloads media. `--media` fetches originals
+    /// and thumbnails, `--media=thumbnails` only thumbnails. Already-downloaded
+    /// files are skipped, and failed files are retried by the next run.
+    #[arg(
+        long,
+        value_enum,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "all",
+        value_name = "MODE"
+    )]
+    media: Option<SyncMediaCli>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SyncMediaCli {
+    /// Originals and thumbnails.
+    All,
+    /// Thumbnails only.
+    Thumbnails,
+}
+
+impl From<SyncMediaCli> for sync::MediaSyncMode {
+    fn from(value: SyncMediaCli) -> Self {
+        match value {
+            SyncMediaCli::All => Self::All,
+            SyncMediaCli::Thumbnails => Self::Thumbnails,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -1638,12 +1669,23 @@ async fn dispatch_sync(base_url: &str, args: SyncCliArgs, store: &Store) -> Resu
         base_url,
         sync::SyncArgs {
             ignore_cursors: args.ignore_cursors,
+            media: args.media.map(Into::into),
         },
     )
     .await?;
     let fatal_error = output.fatal_error.clone();
     let failure = output.failure.take();
     let ok = output.ok;
+    let media_failure = output
+        .media
+        .as_ref()
+        .filter(|media| media.has_failures())
+        .map(|media| {
+            media
+                .error
+                .clone()
+                .unwrap_or_else(|| format!("{} media file(s) failed to download", media.failed))
+        });
     print_json(&output)?;
     if !ok {
         return Err(failure.unwrap_or_else(|| {
@@ -1652,6 +1694,11 @@ async fn dispatch_sync(base_url: &str, args: SyncCliArgs, store: &Store) -> Resu
                 fatal_error.unwrap_or_else(|| "sync failed with fatal error".to_owned())
             )
         }));
+    }
+    if let Some(message) = media_failure {
+        return Err(anyhow!(
+            "{message}; run `dayone sync --media` again to retry"
+        ));
     }
     Ok(())
 }
@@ -1947,6 +1994,28 @@ mod tests {
 
         let parsed = Cli::try_parse_from(["dayone", "tui"]).expect("parse");
         assert_eq!(top_level_command_name(&parsed.command), "tui");
+    }
+
+    #[test]
+    fn sync_media_flag_is_opt_in_and_takes_an_optional_mode() {
+        let media = |args: &[&str]| match Cli::try_parse_from(args).expect("parse").command {
+            TopLevelCommand::Sync(sync) => sync.media.map(sync::MediaSyncMode::from),
+            _ => panic!("expected sync"),
+        };
+        assert_eq!(media(&["dayone", "sync"]), None);
+        assert_eq!(
+            media(&["dayone", "sync", "--media"]),
+            Some(sync::MediaSyncMode::All)
+        );
+        assert_eq!(
+            media(&["dayone", "sync", "--media=all"]),
+            Some(sync::MediaSyncMode::All)
+        );
+        assert_eq!(
+            media(&["dayone", "sync", "--media=thumbnails", "--ignore-cursors"]),
+            Some(sync::MediaSyncMode::Thumbnails)
+        );
+        assert!(Cli::try_parse_from(["dayone", "sync", "--media=bogus"]).is_err());
     }
 
     #[test]

@@ -43,6 +43,15 @@ pub(crate) struct EntriesDecryptor {
     journal_keys_by_fingerprint: HashMap<String, RsaPrivateKey>,
 }
 
+#[cfg(test)]
+impl EntriesDecryptor {
+    pub(crate) fn from_journal_keys(keys: HashMap<String, RsaPrivateKey>) -> Self {
+        Self {
+            journal_keys_by_fingerprint: keys,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct CursorResourceParams<'a> {
     resource_key: &'a str,

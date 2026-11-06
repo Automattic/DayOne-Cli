@@ -414,6 +414,7 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
         17,
         include_str!("migrations/0017_journal_metadata_diagnostics.sql"),
     ),
+    (18, include_str!("migrations/0018_moment_media.sql")),
 ];
 
 fn run_migrations(conn: &mut Connection) -> StoreResult<()> {
