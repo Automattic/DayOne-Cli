@@ -303,6 +303,10 @@ impl Store {
             params![journal_id],
         )?;
         tx.execute(
+            "DELETE FROM moment_media WHERE journal_id = ?1",
+            params![journal_id],
+        )?;
+        tx.execute(
             "DELETE FROM entry_embeddings WHERE journal_id = ?1",
             params![journal_id],
         )?;
@@ -349,6 +353,7 @@ impl Store {
             params![journal_id],
         )?;
         tx.commit()?;
+        self.remove_downloaded_media(journal_id, None);
         Ok(())
     }
 
@@ -365,6 +370,10 @@ impl Store {
         )?;
         tx.execute(
             "DELETE FROM entry_attachments WHERE journal_id = ?1 AND entry_id = ?2",
+            params![journal_id, entry_id],
+        )?;
+        tx.execute(
+            "DELETE FROM moment_media WHERE journal_id = ?1 AND entry_id = ?2",
             params![journal_id, entry_id],
         )?;
         tx.execute(
@@ -398,6 +407,7 @@ impl Store {
             params![format!("{journal_id}:{entry_id}")],
         )?;
         tx.commit()?;
+        self.remove_downloaded_media(journal_id, Some(entry_id));
         Ok(())
     }
 

@@ -3,6 +3,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::store::entries::json::rebuild_entry_content;
+use crate::store::entries::media::MomentMediaKind;
 use crate::store::sqlite::Store;
 use crate::util::normalize_entry_id;
 
@@ -22,7 +23,9 @@ pub struct EntryReadOutput {
     /// The reconstructed entry content: known fields (date, title, body,
     /// richTextJSON, timeZone, tags, moments, clientMeta) plus any preserved
     /// passthrough fields (location, weather, ...), matching the shape
-    /// synced to the API.
+    /// synced to the API. Moments whose media was downloaded with
+    /// `dayone sync --media` also carry `local_path` (and
+    /// `thumbnail.local_path`): absolute paths to the decrypted files.
     pub entry: Value,
 }
 
@@ -56,7 +59,8 @@ pub fn execute(store: &Store, args: EntryReadArgs) -> Result<EntryReadOutput> {
 
     let local: Value = serde_json::from_str(&record.data_json)
         .map_err(|e| anyhow!("failed to parse JSON for entry '{}': {}", entry_id, e))?;
-    let entry = rebuild_entry_content(&local, record.extra_fields_json.as_deref(), &entry_id);
+    let mut entry = rebuild_entry_content(&local, record.extra_fields_json.as_deref(), &entry_id);
+    attach_local_media_paths(store, &record.journal_id, &entry_id, &mut entry);
 
     Ok(EntryReadOutput {
         ok: true,
@@ -66,6 +70,52 @@ pub fn execute(store: &Store, args: EntryReadArgs) -> Result<EntryReadOutput> {
         user_edit_date: record.user_edit_date,
         entry,
     })
+}
+
+/// Adds `local_path` to each moment (and its thumbnail) whose file was
+/// downloaded by `sync --media` and is still on disk. Entries without
+/// downloaded media are left exactly as stored.
+fn attach_local_media_paths(store: &Store, journal_id: &str, entry_id: &str, entry: &mut Value) {
+    let Ok(rows) = store.list_moment_media_for_entry(journal_id, entry_id) else {
+        return;
+    };
+    if rows.is_empty() {
+        return;
+    }
+    let Some(moments) = entry.get_mut("moments").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for moment in moments {
+        let Some(moment_object) = moment.as_object_mut() else {
+            continue;
+        };
+        let Some(moment_id) = moment_object
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        for row in rows.iter().filter(|row| row.moment_id == moment_id) {
+            let Some(path) = store
+                .media_absolute_path(&row.rel_path)
+                .filter(|path| path.is_file())
+            else {
+                continue;
+            };
+            let path = Value::String(path.to_string_lossy().into_owned());
+            if row.kind == MomentMediaKind::Thumbnail.as_str() {
+                let thumbnail = moment_object
+                    .entry("thumbnail")
+                    .or_insert_with(|| Value::Object(Default::default()));
+                if let Some(thumbnail) = thumbnail.as_object_mut() {
+                    thumbnail.insert("local_path".to_owned(), path);
+                }
+            } else {
+                moment_object.insert("local_path".to_owned(), path);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -186,5 +236,68 @@ mod tests {
         )
         .expect("read should succeed");
         assert_eq!(out.entry_id, "A65AFA22B98A0DEC62EAAD3CD1CCF45D");
+    }
+
+    #[test]
+    fn read_adds_local_paths_only_for_downloaded_media() {
+        use crate::store::entries::media::MomentMediaUpsert;
+
+        let (dir, store) = setup_store();
+        store
+            .upsert_entry_json_row(
+                "entry-1",
+                "journal-1",
+                Some("2026-03-17T00:00:00.000Z"),
+                None,
+                r#"{"id":"entry-1","moments":[
+                    {"id":"m1","momentType":"image","thumbnail":{"md5":"t"}},
+                    {"id":"m2","momentType":"image"}
+                ]}"#,
+            )
+            .expect("entry should save");
+        let original = dir.path().join("media/journal-1/entry-1/m1.jpg");
+        std::fs::create_dir_all(original.parent().unwrap()).unwrap();
+        std::fs::write(&original, b"jpg").unwrap();
+        store
+            .upsert_moment_media(&MomentMediaUpsert {
+                journal_id: "journal-1",
+                entry_id: "entry-1",
+                moment_id: "m1",
+                kind: MomentMediaKind::Original,
+                rel_path: "media/journal-1/entry-1/m1.jpg",
+                file_size_bytes: 3,
+                md5: "x",
+                source_md5: None,
+            })
+            .unwrap();
+        // Recorded but missing on disk: no path is reported.
+        store
+            .upsert_moment_media(&MomentMediaUpsert {
+                journal_id: "journal-1",
+                entry_id: "entry-1",
+                moment_id: "m1",
+                kind: MomentMediaKind::Thumbnail,
+                rel_path: "media/journal-1/entry-1/m1.thumb.jpg",
+                file_size_bytes: 3,
+                md5: "x",
+                source_md5: None,
+            })
+            .unwrap();
+
+        let out = execute(
+            &store,
+            EntryReadArgs {
+                journal_id: None,
+                entry_id: "entry-1".to_owned(),
+            },
+        )
+        .expect("read should succeed");
+        let moments = &out.entry["moments"];
+        assert_eq!(
+            moments[0]["local_path"],
+            original.to_string_lossy().as_ref()
+        );
+        assert!(moments[0]["thumbnail"].get("local_path").is_none());
+        assert!(moments[1].get("local_path").is_none());
     }
 }
