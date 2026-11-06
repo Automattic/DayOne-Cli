@@ -4,8 +4,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # RSA 0.9 and PBKDF2 0.12 require digest 0.10 traits.
+    # RSA 0.9 and PBKDF2 0.12 require digest 0.10 traits. PBKDF2 0.13 moved to
+    # digest 0.11, and RSA's digest 0.11 line is still release candidates only.
     ignore:
+      - dependency-name: pbkdf2
+        versions: [">=0.13"]
       - dependency-name: sha1
         versions: [">=0.11"]
       - dependency-name: sha2
