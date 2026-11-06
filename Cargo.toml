@@ -18,6 +18,8 @@ clap = { version = "4", features = ["derive", "env"] }
 dirs = "6"
 flate2 = "1"
 hostname = "0.4"
+hmac = "0.12"
+percent-encoding = "2"
 pbkdf2 = "0.12"
 reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "native-tls", "query"] }
 rpassword = "7"

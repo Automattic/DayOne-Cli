@@ -30,7 +30,7 @@ for p in $(which -a dayone); do echo "$p -> $(realpath "$p")"; done
 | `sync` | (terminal command) Pull remote state, flush local outbox | [references/sync.md](references/sync.md) |
 | `sync-schedule` | `status`, `enable`, `set-interval`, `disable` automatic background sync | [references/sync-schedule.md](references/sync-schedule.md) |
 | `entry` | `write`, `delete` journal entries | [references/entry.md](references/entry.md) |
-| `journal` | `create`, `update` journals | [references/journal.md](references/journal.md) |
+| `journal` | `create`, `update`, `join` journals | [references/journal.md](references/journal.md) |
 | `comment` | `list`, `write`, `update`, `delete`, `react`, `unreact` on shared entries | [references/comment.md](references/comment.md) |
 | `daily-chat add` | (terminal command) Append one message to a date-based Daily Chat | [references/daily-chat.md](references/daily-chat.md) |
 | `context-item` | `put`, `delete` Context Library items | [references/context-item.md](references/context-item.md) |
@@ -126,6 +126,10 @@ In order of priority:
 > **Run `dayone sync` once at the start of any session that will read journal data**, before the first `list`/`search`/`tui` call. Skip only when the user explicitly opts out ("from cache", "use local data", "skip sync"). Within a session no need to re-sync between successive reads unless a write happened in between (in which case re-sync to flush the outbox).
 
 Incremental sync on an established account is fast; the "long-running" warning in [references/sync.md](references/sync.md) mostly applies to fresh accounts and first syncs. For normal desktop use, recommend `dayone sync-schedule enable --interval-minutes 30` so local reads stay fresh without manual syncs.
+
+`dayone journal join <invitation-link>` is online: it immediately requests access
+and returns `pending_approval`. Run `dayone sync` after the owner approves. Use
+`--link-stdin` to read the full invitation URL privately from stdin.
 
 ## Local-first write model
 

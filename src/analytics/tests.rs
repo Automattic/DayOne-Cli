@@ -653,3 +653,18 @@ async fn stale_backlog_does_not_delay_current_consent_events() {
     assert_eq!(names, ["dayone_cli_entry_create"]);
     assert!(store.take_analytics_events(100).expect("take").is_empty());
 }
+
+#[test]
+fn journal_join_subcommand_is_allowed_without_invitation_properties() {
+    let properties = [
+        ("command", json!("journal")),
+        ("subcommand", json!("join")),
+        ("invitation_link", json!("private-invite")),
+    ];
+    let filtered = filter_custom_properties(
+        Event::CommandRun,
+        properties.iter().map(|(key, value)| (*key, value)),
+    );
+    assert_eq!(filtered.get("subcommand"), Some(&json!("join")));
+    assert!(!filtered.contains_key("invitation_link"));
+}

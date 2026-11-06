@@ -216,6 +216,7 @@ fn is_known_subcommand(value: &str) -> bool {
             | "get"
             | "set"
             | "create"
+            | "join"
             | "update"
             | "write"
             | "read"

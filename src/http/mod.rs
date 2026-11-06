@@ -10,6 +10,7 @@ pub mod client;
 pub mod device_info;
 #[cfg(test)]
 pub mod fake;
+pub mod invitation;
 
 pub use device_info::DeviceInfo;
 

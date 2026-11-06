@@ -107,6 +107,12 @@ pub fn now_epoch_ms_string() -> String {
     now_epoch_ms().to_string()
 }
 
+/// Percent-encode a value for use as a single URL path segment.
+///
+/// A value made entirely of dots (`.` or `..`) still forms a complete dot
+/// segment — and the URL parser folds `%2e` spellings too — so encoding alone
+/// cannot keep such a value literal. Callers embedding attacker-controlled
+/// values must reject them before URL construction (see `Invitation::parse`).
 pub fn encode_path_segment(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for b in input.bytes() {

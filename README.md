@@ -287,6 +287,22 @@ dayone journal create --name "Shared Space" --shared --e2e
 
 Shared journals require end-to-end encryption. Use `--e2e` to have the CLI generate the encrypted payload; it requires `dayone auth key-set` and a prior `dayone sync` so the CLI has your encryption key and synced user key material.
 
+Request to join a shared journal using the **complete** invitation link (quote it to
+preserve `?`, `&`, and `#`):
+
+```bash
+dayone journal join 'https://dayone.me/accept-journal-invite?token=INVITATION_TOKEN#INVITATION_KEY'
+# Or supply the link via stdin to keep it out of shell history:
+dayone journal join --link-stdin < invitation-link.txt
+```
+
+Log in, configure your encryption key with `dayone auth key-set`, and run
+`dayone sync` first. Joining is an online request, sent immediately. A successful
+response has `status: "pending_approval"`; the journal owner must approve the
+request before you can read it. Run `dayone sync` after approval to download it.
+Existing members receive `status: "already_member"`. Select the matching authenticated `--profile` for staging invitation links.
+An `--api-host` override requires a session saved for that exact API host. The link's secret fragment stays local.
+
 ### Daily Chat
 
 List daily chats:
