@@ -62,3 +62,11 @@ security-framework = "3.7"
 [dev-dependencies]
 proptest = "1"
 tempfile = "3.27.0"
+
+# Keep dev builds small: line tables are enough for readable backtraces, and
+# dependency crates rarely need to be stepped through in a debugger.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

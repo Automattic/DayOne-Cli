@@ -58,6 +58,7 @@ After implementing a change, verify:
 
 ## Notes for Agents
 
+- Add new integration suites as modules under `tests/integration/` (declared in `tests/integration/main.rs`) rather than as new top-level `tests/*.rs` files. Each top-level file is linked into its own large executable.
 - Prefer updating existing command patterns rather than creating one-off behavior.
 - Keep output machine-readable JSON unless a human-readable mode is explicitly requested.
 - Treat API docs and endpoint behavior as authoritative when docs and code differ.
