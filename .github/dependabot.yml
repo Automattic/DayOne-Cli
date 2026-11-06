@@ -4,12 +4,19 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # RSA 0.9 and PBKDF2 0.12 require digest 0.10 traits.
-    ignore:
-      - dependency-name: sha1
-        versions: [">=0.11"]
-      - dependency-name: sha2
-        versions: [">=0.11"]
+    # rsa, sha1, sha2 and pbkdf2 must move to digest 0.11 together: the rsa
+    # 0.9 line (the latest stable) needs digest 0.10, and the digest 0.11
+    # versions of rsa are still release candidates. Until a stable rsa on
+    # digest 0.11 ships, the grouped PR below fails to build. Leave it open and
+    # do not close it (closing tells Dependabot to skip those versions), and do
+    # not merge any of these packages on their own.
+    groups:
+      hashing-stack:
+        patterns:
+          - rsa
+          - sha1
+          - sha2
+          - pbkdf2
 
   - package-ecosystem: github-actions
     directory: /
