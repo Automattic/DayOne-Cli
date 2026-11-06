@@ -559,12 +559,9 @@ mod tests {
         assert_eq!(content.get("date").and_then(Value::as_f64), Some(1234.0));
         assert_eq!(content["moments"][0]["identifier"], "m1");
         assert_eq!(content["tags"][0], "run");
-        assert_eq!(
-            content.get("richTextJSON").and_then(Value::as_str),
-            Some(
-                "{\"contents\":[{\"attributes\":{},\"text\":\"before\"},{\"embeddedObjects\":[{\"type\":\"photo\",\"identifier\":\"m1\"}]}],\"meta\":{\"version\":1,\"created\":{\"version\":1746805027,\"platform\":\"webapp\"},\"small-lines-removed\":true}}"
-            )
-        );
+        let rich_text = rich_text_of(&content);
+        assert_eq!(all_text(&rich_text), "after");
+        assert!(rich_text.to_string().contains("m1"));
     }
 
     #[test]
@@ -839,6 +836,160 @@ mod tests {
             _ => panic!("third node should be appended text"),
         };
         assert_eq!(appended, "\n\nFelt great");
+    }
+
+    fn rich_text_of(content: &Value) -> Value {
+        serde_json::from_str(
+            content
+                .get("richTextJSON")
+                .and_then(Value::as_str)
+                .expect("richTextJSON should exist"),
+        )
+        .expect("rich text should parse")
+    }
+
+    fn all_text(rich_text: &Value) -> String {
+        rich_text["contents"]
+            .as_array()
+            .expect("contents")
+            .iter()
+            .filter_map(|node| node.get("text").and_then(Value::as_str))
+            .collect()
+    }
+
+    #[test]
+    fn rich_text_append_resolves_markdown_escapes_with_embedded_objects() {
+        let existing = json!({
+            "payload": {
+                "id": "esc-1",
+                "body": "old body",
+                "richTextJSON": "{\"contents\":[{\"attributes\":{},\"text\":\"old body\"},{\"embeddedObjects\":[{\"type\":\"photo\",\"identifier\":\"IMG-1\"}]}],\"meta\":{\"version\":1,\"created\":{\"version\":1746805027,\"platform\":\"webapp\"},\"small-lines-removed\":true}}"
+            }
+        });
+        let content = build_entry_content(
+            Some(&existing),
+            None,
+            "esc-1",
+            "old body\n\nSome sentence\\.\n".to_owned(),
+            None,
+            1_000,
+            &[],
+        )
+        .expect("content build should succeed");
+        let text = all_text(&rich_text_of(&content));
+        assert!(text.contains("Some sentence."), "got {text:?}");
+        assert!(!text.contains('\\'), "escape leaked into RTJ: {text:?}");
+    }
+
+    #[test]
+    fn rich_text_append_resolves_markdown_escapes_without_embedded_objects() {
+        let existing = json!({
+            "payload": {
+                "id": "esc-2",
+                "body": "# Title\n\nFirst",
+                "richTextJSON": "{\"contents\":[{\"attributes\":{\"line\":{\"header\":1}},\"text\":\"Title\\n\"},{\"attributes\":{},\"text\":\"First\"}],\"meta\":{\"version\":1,\"created\":{\"version\":1746805027,\"platform\":\"webapp\"},\"small-lines-removed\":true}}"
+            }
+        });
+        let content = build_entry_content(
+            Some(&existing),
+            None,
+            "esc-2",
+            "# Title\n\nFirst\n\nSome sentence\\.".to_owned(),
+            None,
+            1_000,
+            &[],
+        )
+        .expect("content build should succeed");
+        let text = all_text(&rich_text_of(&content));
+        assert!(text.contains("Some sentence."), "got {text:?}");
+        assert!(!text.contains('\\'), "escape leaked into RTJ: {text:?}");
+    }
+
+    #[test]
+    fn rich_text_edit_regenerates_even_when_entry_has_embedded_objects() {
+        let existing = json!({
+            "payload": {
+                "id": "stale-1",
+                "body": "# Title\n\nMiddle line\n\nTail",
+                "richTextJSON": "{\"contents\":[{\"attributes\":{\"line\":{\"header\":1}},\"text\":\"Title\\n\"},{\"attributes\":{},\"text\":\"Middle line\\n\\nTail\\n\"},{\"embeddedObjects\":[{\"type\":\"photo\",\"identifier\":\"IMG-1\"}]}],\"meta\":{\"version\":1,\"created\":{\"version\":1746805027,\"platform\":\"webapp\"},\"small-lines-removed\":true}}"
+            }
+        });
+        let content = build_entry_content(
+            Some(&existing),
+            None,
+            "stale-1",
+            "# Changed title\n\nMiddle line edited\n\nTail".to_owned(),
+            None,
+            1_000,
+            &[],
+        )
+        .expect("content build should succeed");
+        let rich_text = rich_text_of(&content);
+        let text = all_text(&rich_text);
+        assert!(text.contains("Changed title"), "stale RTJ: {text:?}");
+        assert!(text.contains("Middle line edited"), "stale RTJ: {text:?}");
+        let raw = rich_text.to_string();
+        assert!(raw.contains("IMG-1"), "embedded object was dropped: {raw}");
+    }
+
+    #[test]
+    fn rich_text_edit_keeps_embedded_object_referenced_inline_in_place() {
+        let existing = json!({
+            "payload": {
+                "id": "stale-2",
+                "body": "Before\n\n![](dayone-moment://IMG-1)\n\nAfter",
+                "richTextJSON": "{\"contents\":[{\"attributes\":{},\"text\":\"Before\\n\"},{\"embeddedObjects\":[{\"type\":\"photo\",\"identifier\":\"IMG-1\"}]},{\"attributes\":{},\"text\":\"After\\n\"}],\"meta\":{\"version\":1,\"created\":{\"version\":1746805027,\"platform\":\"webapp\"},\"small-lines-removed\":true}}"
+            }
+        });
+        let content = build_entry_content(
+            Some(&existing),
+            None,
+            "stale-2",
+            "Before edited\n\n![](dayone-moment://IMG-1)\n\nAfter".to_owned(),
+            None,
+            1_000,
+            &[],
+        )
+        .expect("content build should succeed");
+        let rich_text = rich_text_of(&content);
+        let raw = rich_text.to_string();
+        assert_eq!(raw.matches("IMG-1").count(), 1, "got {raw}");
+        assert!(all_text(&rich_text).contains("Before edited"), "got {raw}");
+    }
+
+    #[test]
+    fn rich_text_rebuild_preserves_line_identifiers_for_unchanged_lines() {
+        let existing = json!({
+            "payload": {
+                "id": "ident-1",
+                "body": "# Title\n\n- one\n- two\n\n> quoted",
+                "richTextJSON": "{\"contents\":[{\"attributes\":{\"line\":{\"header\":1,\"identifier\":\"H-1\"}},\"text\":\"Title\\n\"},{\"attributes\":{\"line\":{\"listStyle\":\"bulleted\",\"identifier\":\"L-1\"}},\"text\":\"one\\n\"},{\"attributes\":{\"line\":{\"listStyle\":\"bulleted\",\"identifier\":\"L-2\"}},\"text\":\"two\\n\"},{\"attributes\":{\"line\":{\"quote\":true,\"identifier\":\"Q-1\"}},\"text\":\"quoted\\n\"}],\"meta\":{\"version\":1,\"created\":{\"version\":1746805027,\"platform\":\"webapp\"},\"small-lines-removed\":true}}"
+            }
+        });
+        let content = build_entry_content(
+            Some(&existing),
+            None,
+            "ident-1",
+            "# Title\n\n- one\n- two changed\n\n> quoted".to_owned(),
+            None,
+            1_000,
+            &[],
+        )
+        .expect("content build should succeed");
+        let rich_text = rich_text_of(&content);
+        let id_of = |text: &str| -> Option<String> {
+            rich_text["contents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|node| node.get("text").and_then(Value::as_str) == Some(text))
+                .and_then(|node| node["attributes"]["line"]["identifier"].as_str())
+                .map(str::to_owned)
+        };
+        assert_eq!(id_of("Title\n").as_deref(), Some("H-1"));
+        assert_eq!(id_of("one\n").as_deref(), Some("L-1"));
+        assert_eq!(id_of("quoted").as_deref(), Some("Q-1"));
+        assert_eq!(id_of("two changed\n"), None, "edited line has no known id");
     }
 
     #[test]

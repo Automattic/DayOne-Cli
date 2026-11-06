@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{Value, json};
 
-use crate::convert::model::{RtjDocument, RtjNode};
 use crate::entry::attachments::{MediaType, NewMoment};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,11 +171,186 @@ pub fn build_updated_rich_text_json(
         return rebuild_rich_text_json_from_body(new_body, now_ms);
     }
 
-    if rich_text_json_has_embedded_objects(existing_raw) {
-        return Some(existing_raw.to_owned());
+    rebuild_preserving_existing_rich_text(existing_raw, existing_body, new_body, now_ms)
+}
+
+/// Regenerate the rich text from the edited body while carrying over what the
+/// body cannot express: embedded objects (kept verbatim, in place when the
+/// body references them inline, otherwise appended) and the line identifiers of
+/// lines that survived the edit.
+fn rebuild_preserving_existing_rich_text(
+    existing_raw: &str,
+    existing_body: &str,
+    new_body: &str,
+    now_ms: i64,
+) -> Option<String> {
+    let rebuilt_raw = rebuild_rich_text_json_from_body(new_body, now_ms)?;
+    let (Ok(existing_doc), Ok(mut doc)) = (
+        serde_json::from_str::<Value>(existing_raw),
+        serde_json::from_str::<Value>(&rebuilt_raw),
+    ) else {
+        return Some(rebuilt_raw);
+    };
+    let existing_contents = rich_text_contents(&existing_doc)
+        .cloned()
+        .unwrap_or_default();
+    let Some(contents) = doc.get_mut("contents").and_then(Value::as_array_mut) else {
+        return Some(rebuilt_raw);
+    };
+
+    let existing_embeds: HashMap<String, Value> = existing_contents
+        .iter()
+        .flat_map(embedded_objects_of)
+        .filter_map(|object| Some((embedded_object_id(object)?.to_owned(), object.clone())))
+        .collect();
+    for node in contents.iter_mut() {
+        if let Some(objects) = node
+            .get_mut("embeddedObjects")
+            .and_then(Value::as_array_mut)
+        {
+            for object in objects {
+                if let Some(original) = embedded_object_id(object)
+                    .and_then(|id| existing_embeds.get(id))
+                    .cloned()
+                {
+                    *object = original;
+                }
+            }
+        }
     }
 
-    rebuild_rich_text_json_from_body(new_body, now_ms)
+    // An embed the old body never mentioned can only live in the rich text, so
+    // dropping it would silently delete an attachment. One the old body did
+    // mention and the new body no longer does was removed on purpose.
+    let mut represented: HashSet<String> = contents
+        .iter()
+        .flat_map(embedded_objects_of)
+        .filter_map(|object| embedded_object_id(object).map(str::to_owned))
+        .collect();
+    represented.extend(
+        parse_dayone_moment_placeholders(existing_body)
+            .into_iter()
+            .filter_map(|placeholder| placeholder.identifier),
+    );
+    for node in &existing_contents {
+        let orphaned: Vec<Value> = embedded_objects_of(node)
+            .filter(|object| embedded_object_id(object).is_some_and(|id| !represented.contains(id)))
+            .cloned()
+            .collect();
+        if !orphaned.is_empty() {
+            contents.push(json!({ "embeddedObjects": orphaned }));
+        }
+    }
+
+    copy_line_identifiers(&existing_contents, contents);
+    serde_json::to_string(&doc).ok().or(Some(rebuilt_raw))
+}
+
+fn rich_text_contents(doc: &Value) -> Option<&Vec<Value>> {
+    doc.get("contents")
+        .or_else(|| doc.get("nodes"))
+        .and_then(Value::as_array)
+}
+
+fn embedded_objects_of(node: &Value) -> impl Iterator<Item = &Value> {
+    node.get("embeddedObjects")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+}
+
+fn embedded_object_id(object: &Value) -> Option<&str> {
+    object.get("identifier").and_then(Value::as_str)
+}
+
+/// Group node indices into logical lines: a line ends at a text node whose
+/// text ends in a newline, or at an embedded node.
+fn line_groups(contents: &[Value]) -> Vec<Vec<usize>> {
+    let mut lines = Vec::new();
+    let mut current = Vec::new();
+    for (idx, node) in contents.iter().enumerate() {
+        match node.get("text").and_then(Value::as_str) {
+            Some(text) => {
+                current.push(idx);
+                if text.ends_with('\n') {
+                    lines.push(std::mem::take(&mut current));
+                }
+            }
+            None => {
+                if !current.is_empty() {
+                    lines.push(std::mem::take(&mut current));
+                }
+            }
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+fn line_text(contents: &[Value], line: &[usize]) -> String {
+    line.iter()
+        .filter_map(|idx| contents[*idx].get("text").and_then(Value::as_str))
+        .collect::<String>()
+        .trim_end_matches('\n')
+        .to_owned()
+}
+
+fn line_identifier(contents: &[Value], line: &[usize]) -> Option<String> {
+    line.iter().find_map(|idx| {
+        contents[*idx]
+            .get("attributes")?
+            .get("line")?
+            .get("identifier")?
+            .as_str()
+            .map(str::to_owned)
+    })
+}
+
+/// Lines that still exist after an edit keep the identifier the previous rich
+/// text gave them. Lines are matched by their text, in order, so a repeated
+/// line takes the identifiers of its earlier twins first. Only lines that
+/// already carry line attributes (headers, lists, quotes) get an identifier.
+fn copy_line_identifiers(old_contents: &[Value], new_contents: &mut [Value]) {
+    let mut available: HashMap<String, Vec<String>> = HashMap::new();
+    for line in line_groups(old_contents) {
+        if let Some(id) = line_identifier(old_contents, &line) {
+            available
+                .entry(line_text(old_contents, &line))
+                .or_default()
+                .push(id);
+        }
+    }
+    for ids in available.values_mut() {
+        ids.reverse();
+    }
+    for line in line_groups(new_contents) {
+        let has_line_attrs = line.iter().any(|idx| {
+            new_contents[*idx]
+                .get("attributes")
+                .and_then(|attrs| attrs.get("line"))
+                .is_some_and(Value::is_object)
+        });
+        if !has_line_attrs {
+            continue;
+        }
+        let Some(id) = available
+            .get_mut(&line_text(new_contents, &line))
+            .and_then(Vec::pop)
+        else {
+            continue;
+        };
+        for idx in line {
+            if let Some(line_attrs) = new_contents[idx]
+                .get_mut("attributes")
+                .and_then(|attrs| attrs.get_mut("line"))
+                .and_then(Value::as_object_mut)
+            {
+                line_attrs.insert("identifier".to_owned(), Value::String(id.clone()));
+            }
+        }
+    }
 }
 
 fn rebuild_rich_text_json_from_body(new_body: &str, now_ms: i64) -> Option<String> {
@@ -430,24 +604,37 @@ fn normalize_line_endings(input: &str) -> String {
     input.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-fn rich_text_json_has_embedded_objects(raw: &str) -> bool {
-    serde_json::from_str::<RtjDocument>(raw)
-        .ok()
-        .map(|doc| {
-            doc.contents.iter().any(|node| {
-                matches!(node, RtjNode::Embedded(embedded) if !embedded.embedded_objects.is_empty())
-            })
-        })
-        .unwrap_or(false)
-}
-
+/// Append the markdown the body gained, converted like any other markdown, so
+/// escapes and formatting in the new text are resolved rather than copied.
 fn append_text_to_rich_text(existing_raw: &str, suffix: &str) -> Option<String> {
     let mut doc: Value = serde_json::from_str(existing_raw).ok()?;
     let contents = doc.get_mut("contents")?.as_array_mut()?;
-    contents.push(json!({
-        "attributes": {},
-        "text": suffix
-    }));
+
+    let markdown = suffix.trim_start_matches('\n');
+    let leading_newlines = suffix.len() - markdown.len();
+    if markdown.trim().is_empty() {
+        contents.push(json!({ "attributes": {}, "text": suffix }));
+        return serde_json::to_string(&doc).ok();
+    }
+
+    let mut appended: Vec<Value> = Vec::new();
+    append_rtjson_nodes_from_markdown_cached(&mut appended, markdown, &mut HashMap::new());
+    if leading_newlines > 0 {
+        let padding = "\n".repeat(leading_newlines);
+        let first_is_plain_text = appended.first().is_some_and(|node| {
+            node.get("text").is_some()
+                && !node
+                    .get("attributes")
+                    .is_some_and(|attrs| attrs.get("line").is_some())
+        });
+        if first_is_plain_text {
+            let first_text = appended[0]["text"].as_str().unwrap_or_default();
+            appended[0]["text"] = Value::String(format!("{padding}{first_text}"));
+        } else {
+            appended.insert(0, json!({ "attributes": {}, "text": padding }));
+        }
+    }
+    contents.extend(appended);
     serde_json::to_string(&doc).ok()
 }
 
@@ -787,7 +974,7 @@ mod tests {
     }
 
     #[test]
-    fn build_updated_rich_text_json_preserves_non_append_edit_when_embeds_exist() {
+    fn build_updated_rich_text_json_regenerates_non_append_edit_and_keeps_embeds() {
         let existing_raw = "{\"contents\":[{\"attributes\":{\"line\":{\"header\":1}},\"text\":\"Old title\\n\"},{\"text\":\"Old paragraph.\\n\\n\"},{\"embeddedObjects\":[{\"type\":\"photo\",\"identifier\":\"IMG-1\"},{\"type\":\"map\",\"identifier\":\"MAP-1\"}]},{\"text\":\"Old tail.\"}],\"meta\":{\"version\":1,\"created\":{\"version\":1746805027,\"platform\":\"webapp\"},\"small-lines-removed\":true}}";
         let existing = json!({
             "payload": {
@@ -801,13 +988,21 @@ mod tests {
             "# Old title\n\nChanged middle paragraph.\n\nOld tail.",
             1_700_000_000_000,
         )
-        .expect("rich text should be preserved");
+        .expect("rich text should be rebuilt");
 
-        assert_eq!(updated, existing_raw);
+        assert!(
+            updated.contains("Changed middle paragraph."),
+            "got {updated}"
+        );
+        assert!(!updated.contains("Old paragraph."), "got {updated}");
+        assert!(
+            updated.contains("IMG-1") && updated.contains("MAP-1"),
+            "got {updated}"
+        );
     }
 
     #[test]
-    fn build_updated_rich_text_json_preserves_non_append_edit_when_embeds_exist_in_nodes_alias() {
+    fn build_updated_rich_text_json_regenerates_edit_and_keeps_embeds_in_nodes_alias() {
         let existing_raw = "{\"nodes\":[{\"text\":\"Old title\\n\"},{\"embeddedObjects\":[{\"type\":\"photo\",\"identifier\":\"IMG-1\"}]}],\"meta\":{\"version\":1}}";
         let existing = json!({
             "payload": {
@@ -818,9 +1013,10 @@ mod tests {
 
         let updated =
             build_updated_rich_text_json(Some(&existing), "Changed title", 1_700_000_000_000)
-                .expect("rich text should be preserved");
+                .expect("rich text should be rebuilt");
 
-        assert_eq!(updated, existing_raw);
+        assert!(updated.contains("Changed title"), "got {updated}");
+        assert!(updated.contains("IMG-1"), "got {updated}");
     }
 
     #[test]
