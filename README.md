@@ -457,6 +457,7 @@ dayone sync --media=thumbnails    # thumbnails only
 - Media in end-to-end encrypted journals is decrypted locally with your journal keys; run `dayone auth key-set` and sync first, as for entry text. Without the key those files fail with a clear error and nothing encrypted is written to disk.
 - Runs are resumable and idempotent: a file that is already present at its recorded size, for the same media version, is skipped, so you can re-run `sync --media` (or schedule it) at any time. Up to 4 files download in parallel; rate-limit (`429`) and `5xx` responses are retried with backoff.
 - One failing file never stops the others. The JSON output gains a `media` object with `files_total`, `downloaded`, `skipped`, `not_on_server` (the server has no bytes yet, for example while another device is still uploading), `failed`, `bytes_downloaded`, and up to 50 `failures`. If any file failed, the command still prints the full JSON but exits non-zero; the next `sync --media` retries them.
+- Each file is held in memory while it is downloaded and decrypted, so a very large video needs that much free RAM at that moment. Streaming to disk is planned as a follow-up (#53).
 - `entry read` reports the local file paths, and `dayone doctor` counts downloaded photos in `attachments` and their disk usage in `media_bytes`. `doctor` reports only counts and byte totals, never paths, file names, or IDs.
 - Deleting an entry or journal locally also removes its downloaded files. Downloads are held in memory while being decrypted, so very large videos need that much free RAM.
 
