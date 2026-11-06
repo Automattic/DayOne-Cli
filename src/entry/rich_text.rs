@@ -165,10 +165,11 @@ pub fn build_updated_rich_text_json(
         if suffix.is_empty() {
             return Some(existing_raw.to_owned());
         }
-        if let Some(updated) = append_text_to_rich_text(existing_raw, suffix) {
+        if append_is_safe(&existing_body_normalized, suffix)
+            && let Some(updated) = append_text_to_rich_text(existing_raw, suffix)
+        {
             return Some(updated);
         }
-        return rebuild_rich_text_json_from_body(new_body, now_ms);
     }
 
     rebuild_preserving_existing_rich_text(existing_raw, existing_body, new_body, now_ms)
@@ -194,6 +195,11 @@ fn rebuild_preserving_existing_rich_text(
     let existing_contents = rich_text_contents(&existing_doc)
         .cloned()
         .unwrap_or_default();
+    // The regenerated document keeps the original `meta`: it records which
+    // client created the rich text, and that is not ours to rewrite.
+    if let Some(meta) = existing_doc.get("meta") {
+        doc["meta"] = meta.clone();
+    }
     let Some(contents) = doc.get_mut("contents").and_then(Value::as_array_mut) else {
         return Some(rebuilt_raw);
     };
@@ -604,11 +610,79 @@ fn normalize_line_endings(input: &str) -> String {
     input.replace("\r\n", "\n").replace('\r', "\n")
 }
 
+/// Whether appending `suffix` to a rich text for `old_body` can be done by
+/// converting the suffix on its own. That only holds when the suffix starts
+/// after a blank line (so no whitespace or inline context is shared with the
+/// last line) and nothing in the old body can reach into it: an open code
+/// fence, a link reference definition on either side, an unterminated raw HTML
+/// block, or a suffix that starts indented or as a list item (and so may
+/// continue a block above). A whitespace-only suffix is always safe.
+/// Everything else is rebuilt from the whole new body.
+fn append_is_safe(old_body: &str, suffix: &str) -> bool {
+    if suffix.trim().is_empty() {
+        return true;
+    }
+    let trailing_newlines = old_body.chars().rev().take_while(|c| *c == '\n').count();
+    let leading_newlines = suffix.chars().take_while(|c| *c == '\n').count();
+    if trailing_newlines + leading_newlines < 2 {
+        return false;
+    }
+    let markdown = &suffix[leading_newlines..];
+    let first_line = markdown.lines().next().unwrap_or_default();
+    if first_line.starts_with([' ', '\t']) || starts_list_item(first_line) {
+        return false;
+    }
+    if has_open_fence(old_body) {
+        return false;
+    }
+    let lower = old_body.to_ascii_lowercase();
+    if ["<pre", "<script", "<style", "<textarea", "<!--"]
+        .iter()
+        .any(|tag| lower.contains(tag))
+    {
+        return false;
+    }
+    !old_body
+        .lines()
+        .chain(markdown.lines())
+        .any(is_link_definition)
+}
+
+fn starts_list_item(line: &str) -> bool {
+    let line = line.trim_start();
+    if ["- ", "* ", "+ "].iter().any(|m| line.starts_with(m)) || matches!(line, "-" | "*" | "+") {
+        return true;
+    }
+    let digits = line.chars().take_while(char::is_ascii_digit).count();
+    digits > 0 && [". ", ") "].iter().any(|m| line[digits..].starts_with(m))
+}
+
+fn has_open_fence(body: &str) -> bool {
+    ["```", "~~~"].iter().any(|fence| {
+        body.lines()
+            .filter(|line| line.trim_start().starts_with(fence))
+            .count()
+            % 2
+            == 1
+    })
+}
+
+fn is_link_definition(line: &str) -> bool {
+    let line = line.trim_start();
+    line.starts_with('[') && line.contains("]:")
+}
+
 /// Append the markdown the body gained, converted like any other markdown, so
 /// escapes and formatting in the new text are resolved rather than copied.
+/// Callers must check `append_is_safe` first.
 fn append_text_to_rich_text(existing_raw: &str, suffix: &str) -> Option<String> {
     let mut doc: Value = serde_json::from_str(existing_raw).ok()?;
-    let contents = doc.get_mut("contents")?.as_array_mut()?;
+    let key = if doc.get("contents").is_some() {
+        "contents"
+    } else {
+        "nodes"
+    };
+    let contents = doc.get_mut(key)?.as_array_mut()?;
 
     let markdown = suffix.trim_start_matches('\n');
     let leading_newlines = suffix.len() - markdown.len();
@@ -623,9 +697,9 @@ fn append_text_to_rich_text(existing_raw: &str, suffix: &str) -> Option<String> 
         let padding = "\n".repeat(leading_newlines);
         let first_is_plain_text = appended.first().is_some_and(|node| {
             node.get("text").is_some()
-                && !node
+                && node
                     .get("attributes")
-                    .is_some_and(|attrs| attrs.get("line").is_some())
+                    .is_none_or(|attrs| attrs.as_object().is_some_and(|obj| obj.is_empty()))
         });
         if first_is_plain_text {
             let first_text = appended[0]["text"].as_str().unwrap_or_default();
@@ -970,7 +1044,7 @@ mod tests {
 
         assert!(!updated.contains("Old paragraph"), "got {updated}");
         assert!(updated.contains("New title"), "got {updated}");
-        assert!(updated.contains("dayone-cli"), "got {updated}");
+        assert!(updated.contains("webapp"), "meta must be kept: {updated}");
     }
 
     #[test]

@@ -849,8 +849,10 @@ mod tests {
     }
 
     fn all_text(rich_text: &Value) -> String {
-        rich_text["contents"]
-            .as_array()
+        rich_text
+            .get("contents")
+            .or_else(|| rich_text.get("nodes"))
+            .and_then(Value::as_array)
             .expect("contents")
             .iter()
             .filter_map(|node| node.get("text").and_then(Value::as_str))
@@ -990,6 +992,159 @@ mod tests {
         assert_eq!(id_of("one\n").as_deref(), Some("L-1"));
         assert_eq!(id_of("quoted").as_deref(), Some("Q-1"));
         assert_eq!(id_of("two changed\n"), None, "edited line has no known id");
+    }
+
+    fn edit_with_rich_text(old_body: &str, old_rtj: &str, new_body: &str) -> Value {
+        let existing = json!({
+            "payload": { "id": "e", "body": old_body, "richTextJSON": old_rtj }
+        });
+        build_entry_content(
+            Some(&existing),
+            None,
+            "e",
+            new_body.to_owned(),
+            None,
+            1_000,
+            &[],
+        )
+        .expect("content build should succeed")
+    }
+
+    fn plain_rtj(text: &str) -> String {
+        json!({
+            "contents": [{ "attributes": {}, "text": text }],
+            "meta": {"version": 1, "created": {"version": 1746805027, "platform": "webapp"}, "small-lines-removed": true}
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn rich_text_mid_line_append_keeps_the_joining_space() {
+        for (old, old_rtj, new, expected) in [
+            ("Hello", "Hello", "Hello world", "Hello world"),
+            ("Hello", "Hello", "Hello world ", "Hello world"),
+            ("- a", "a", "- a b", "a b"),
+            ("Hello\n", "Hello\n", "Hello\n  indented", "indented"),
+        ] {
+            let content = edit_with_rich_text(old, &plain_rtj(old_rtj), new);
+            let text = all_text(&rich_text_of(&content));
+            assert!(text.contains(expected), "{old:?} -> {new:?} gave {text:?}");
+            assert!(!text.contains("Helloworld"), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn rich_text_append_after_open_fence_is_parsed_with_the_whole_body() {
+        let old = "```\ncode";
+        let content = edit_with_rich_text(old, &plain_rtj(old), "```\ncode\n*not bold*\n");
+        let raw = rich_text_of(&content).to_string();
+        assert!(
+            !raw.contains("\"italic\""),
+            "fenced text became italic: {raw}"
+        );
+    }
+
+    #[test]
+    fn rich_text_append_continues_a_quote() {
+        let old = "> quote";
+        let content = edit_with_rich_text(old, &plain_rtj(old), "> quote\ncontinued");
+        let rich_text = rich_text_of(&content);
+        for node in rich_text["contents"].as_array().unwrap() {
+            if node["text"]
+                .as_str()
+                .is_some_and(|t| t.contains("continued"))
+            {
+                assert_eq!(node["attributes"]["line"]["quote"], true, "{rich_text}");
+            }
+        }
+    }
+
+    #[test]
+    fn rich_text_append_turns_the_last_line_into_a_setext_heading() {
+        let old = "Title";
+        let content = edit_with_rich_text(old, &plain_rtj(old), "Title\n===");
+        let rich_text = rich_text_of(&content);
+        assert!(!all_text(&rich_text).contains("==="), "{rich_text}");
+        assert!(rich_text.to_string().contains("\"header\""), "{rich_text}");
+    }
+
+    #[test]
+    fn rich_text_append_resolves_a_link_reference_defined_in_the_suffix() {
+        let old = "see [x][1]";
+        let content = edit_with_rich_text(old, &plain_rtj(old), "see [x][1]\n\n[1]: http://e.com");
+        let rich_text = rich_text_of(&content);
+        assert!(!all_text(&rich_text).contains("[1]:"), "{rich_text}");
+        assert!(
+            rich_text.to_string().contains("http://e.com"),
+            "{rich_text}"
+        );
+    }
+
+    #[test]
+    fn rich_text_append_on_nodes_alias_keeps_embeds() {
+        let old_rtj = r#"{"nodes":[{"attributes":{},"text":"Hello\n"},{"embeddedObjects":[{"type":"photo","identifier":"IMG-1"}]}],"meta":{"version":1,"created":{"version":1746805027,"platform":"webapp"},"small-lines-removed":true}}"#;
+        for new in ["Hello\nmore", "Hello\n\nmore"] {
+            let content = edit_with_rich_text("Hello\n", old_rtj, new);
+            let rich_text = rich_text_of(&content);
+            let raw = rich_text.to_string();
+            assert!(raw.contains("IMG-1"), "{new:?} dropped the embed: {raw}");
+            assert!(all_text(&rich_text).contains("more"), "{raw}");
+        }
+    }
+
+    #[test]
+    fn rich_text_append_padding_never_lands_in_a_styled_node() {
+        let old = "Hello";
+        let content = edit_with_rich_text(old, &plain_rtj(old), "Hello\n\n`a\\.b`");
+        let rich_text = rich_text_of(&content);
+        for node in rich_text["contents"].as_array().unwrap() {
+            if node["attributes"]["inlineCode"] == true {
+                assert!(
+                    !node["text"].as_str().unwrap().starts_with('\n'),
+                    "{rich_text}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rich_text_rebuild_keeps_meta_across_consecutive_edits() {
+        let old_rtj = r#"{"contents":[{"attributes":{},"text":"one\n"},{"embeddedObjects":[{"type":"photo","identifier":"IMG-1"}]}],"meta":{"version":1,"created":{"version":1746805027,"platform":"webapp"},"small-lines-removed":false}}"#;
+        let first = edit_with_rich_text("one\n", old_rtj, "uno\n");
+        let first_rtj = rich_text_of(&first);
+        assert_eq!(first_rtj["meta"]["created"]["platform"], "webapp");
+        assert_eq!(first_rtj["meta"]["small-lines-removed"], false);
+        assert_eq!(first_rtj["meta"]["created"]["version"], 1746805027);
+
+        let second = build_entry_content(
+            Some(&first),
+            None,
+            "e",
+            "dos\n".to_owned(),
+            None,
+            2_000,
+            &[],
+        )
+        .expect("second edit should build");
+        let second_rtj = rich_text_of(&second);
+        assert!(all_text(&second_rtj).contains("dos"), "{second_rtj}");
+        assert!(second_rtj.to_string().contains("IMG-1"), "{second_rtj}");
+        assert_eq!(second_rtj["meta"]["created"]["platform"], "webapp");
+    }
+
+    #[test]
+    fn rich_text_rebuild_keeps_distinct_identifiers_for_duplicate_lines() {
+        let old_rtj = r#"{"contents":[{"attributes":{"line":{"listStyle":"bulleted","identifier":"L-1"}},"text":"a\n"},{"attributes":{"line":{"listStyle":"bulleted","identifier":"L-2"}},"text":"a\n"}],"meta":{"version":1,"created":{"version":1746805027,"platform":"webapp"},"small-lines-removed":true}}"#;
+        let content = edit_with_rich_text("- a\n- a\n", old_rtj, "- a\n- a\n- b\n");
+        let rich_text = rich_text_of(&content);
+        let ids: Vec<&str> = rich_text["contents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["text"].as_str().is_some_and(|t| t.starts_with('a')))
+            .filter_map(|n| n["attributes"]["line"]["identifier"].as_str())
+            .collect();
+        assert_eq!(ids, ["L-1", "L-2"], "{rich_text}");
     }
 
     #[test]
