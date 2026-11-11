@@ -361,6 +361,26 @@ Override config directory:
 DAYONE_CONFIG_DIR=/path/to/config dayone user-settings get
 ```
 
+### Model cache
+
+The CLI downloads the embedding model when a command first needs it. All profiles share the model cache, independent of the working directory:
+
+| Platform | Default model cache |
+| --- | --- |
+| Linux | `$XDG_CACHE_HOME/dayone-cli/models`, or `~/.cache/dayone-cli/models` |
+| macOS | `~/Library/Caches/dayone-cli/models` |
+| Windows | `%LOCALAPPDATA%\dayone-cli\models` |
+
+Set `FASTEMBED_CACHE_DIR` to override this location. The model library also accepts `HF_HOME`, which takes precedence if both variables are set. Use an absolute path for a location that does not depend on the working directory.
+
+The CLI creates the cache directory when needed. If a filesystem operation fails, the error includes the cache path. The CLI does not change existing permissions or fall back to another directory.
+
+The CLI stores downloaded model files here. Profile databases and credentials stay in their existing locations. If you delete the model cache, the CLI downloads the model again when needed.
+
+**Upgrade note:** Earlier versions used `.fastembed_cache` in the directory where you ran the CLI. Without a cache override, the first command that needs the model downloads about 90 MB into the new location. That download requires internet access. The CLI does not search for, move, or delete old caches. Cache overrides continue to work unchanged.
+
+After a command successfully uses the new cache, you can manually remove old `.fastembed_cache` directories that no other tool or CLI installation uses. To reuse an old cache instead, set `FASTEMBED_CACHE_DIR` to its absolute path, with no conflicting `HF_HOME` value.
+
 ### Shared secrets file (CLI)
 
 On startup, before parsing arguments, the CLI loads `KEY=value` lines from `~/.config/dayone/secrets-cli` when that file exists (dotenv format, via the `dotenvy` crate). Values already set in the process environment are left unchanged, so explicit `export` / CI secrets take precedence. Use this for local CLI-only variables such as `DAYONE_API_HOST` without checking them into the repo.

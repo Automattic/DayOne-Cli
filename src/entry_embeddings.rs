@@ -139,10 +139,32 @@ fn embed_with_prefix_batch(
 #[cfg(all(not(test), feature = "embeddings"))]
 fn embedding_model() -> Result<&'static Mutex<TextEmbedding>> {
     let init = EMBEDDING_MODEL.get_or_init(|| {
-        let options =
-            TextInitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(false);
+        let cache_dir = std::env::var("HF_HOME")
+            .or_else(|_| std::env::var("FASTEMBED_CACHE_DIR"))
+            .map(std::path::PathBuf::from)
+            .ok()
+            .or_else(|| dirs::cache_dir().map(|dir| dir.join("dayone-cli/models")))
+            .ok_or_else(|| {
+                "failed to resolve model cache directory; set FASTEMBED_CACHE_DIR to a writable directory"
+                    .to_owned()
+            })?;
+        std::fs::create_dir_all(&cache_dir).map_err(|err| {
+            format!(
+                "failed to create model cache directory '{}': {err}; set HF_HOME or FASTEMBED_CACHE_DIR to a writable directory (HF_HOME takes precedence)",
+                cache_dir.display()
+            )
+        })?;
+        let options = TextInitOptions::new(EmbeddingModel::AllMiniLML6V2)
+            .with_cache_dir(cache_dir.clone())
+            .with_show_download_progress(false);
         TextEmbedding::try_new(options)
             .map(Mutex::new)
+            .with_context(|| {
+                format!(
+                    "model cache directory '{}' (HF_HOME takes precedence over FASTEMBED_CACHE_DIR)",
+                    cache_dir.display()
+                )
+            })
             .map_err(|err| format!("{err:#}"))
     });
     match init {
