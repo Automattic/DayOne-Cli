@@ -348,11 +348,16 @@ fn queue_local_entry_update_if_newer(
     // `user_edit_date` next to a preserved camelCase `userEditDate` would make
     // the snapshot fail `Entry` deserialization at push time with a serde
     // "duplicate field" error, so the snapshot itself must stay as rebuilt.
+    // The persisted column is the authoritative local edit time. A blob last
+    // pulled from the server still carries that revision's `userEditDate`,
+    // which `extract_edit_timestamp` would prefer; reusing it would requeue
+    // the edit with the server's own edit date, and the server rejects that as
+    // `dirty`.
     let mut comparison = local_for_conflict.clone();
     if let Some(user_edit_date) = store.get_entry_user_edit_date(entry_id)?
         && let Some(obj) = comparison.as_object_mut()
-        && !obj.contains_key("userEditDate")
     {
+        obj.remove("userEditDate");
         obj.insert("user_edit_date".to_owned(), Value::String(user_edit_date));
     }
     if !local_is_newer(&comparison, server_value) {
@@ -1026,6 +1031,61 @@ mod tests {
             )
             .expect("outbox query should succeed");
         assert_eq!(outbox_count, 1);
+    }
+
+    /// A re-edit of an entry that was last pulled from the server keeps the
+    /// server's camelCase `userEditDate` in its stored blob. The persisted
+    /// `user_edit_date` column is the authoritative local edit time, so the
+    /// requeued update must carry that, not the stale blob value; otherwise the
+    /// push reuses the server's own edit date and is rejected as `dirty`.
+    #[test]
+    fn requeued_local_update_uses_persisted_edit_date_over_stale_blob_value() {
+        let path = test_store_path("requeue-persisted-edit-date");
+        let store = Store::open_at(&*path).expect("store should open");
+        store
+            .upsert_entry_json_row_with_edit_date(
+                "entry-1",
+                "journal-1",
+                Some("2024-04-10T12:00:10.000Z"),
+                Some("2024-04-10T12:00:10.000Z"),
+                None,
+                r#"{"id":"entry-1","body":"edited again","userEditDate":"2024-04-10T12:00:00.000Z"}"#,
+            )
+            .expect("local entry should save");
+        store
+            .enqueue_outbox_item(
+                "entry:journal-1:entry-1",
+                "entry",
+                "update",
+                "journal-1:entry-1",
+                r#"{"journal_id":"journal-1","entry_id":"entry-1"}"#,
+                0,
+            )
+            .expect("pending update outbox should save");
+
+        let server_value = json!({
+            "revision": { "type": "update", "editDate": 1_712_750_400_000_i64 }
+        });
+        assert!(
+            queue_local_entry_update_if_newer(&store, "journal-1", "entry-1", &server_value)
+                .expect("resolution should succeed")
+        );
+        let items = store
+            .list_outbox_item_details(true)
+            .expect("outbox should list");
+        assert_eq!(items.len(), 1);
+        let payload: Value = serde_json::from_str(
+            items[0]
+                .payload_json
+                .as_deref()
+                .expect("payload should be present"),
+        )
+        .expect("payload should parse");
+        assert_eq!(
+            payload["edit_date_epoch_ms"].as_i64(),
+            Some(1_712_750_410_000),
+            "requeued update must carry the local edit date, got {payload}"
+        );
     }
 
     #[test]
