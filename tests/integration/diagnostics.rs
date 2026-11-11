@@ -345,3 +345,287 @@ fn doctor_reports_corrupt_sqlite_without_echoing_its_path() {
     assert!(!raw.contains("doctor-corrupt-private-path"));
     assert!(!raw.contains("dayone.db"));
 }
+
+fn embedding_doctor_fixture() -> tempfile::TempDir {
+    let root = tempfile::tempdir().expect("config directory");
+    let init = run_dayone(root.path(), &["--profile", "production", "outbox", "list"]);
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    std::fs::write(root.path().join(".fastembed_cache"), b"model cache blocker")
+        .expect("cache blocker");
+    root
+}
+
+fn embedding_doctor_report(root: &Path) -> Value {
+    let output = Command::new(env!("CARGO_BIN_EXE_dayone"))
+        .current_dir(root)
+        .env_clear()
+        .env("HOME", root)
+        .env("DAYONE_CONFIG_DIR", root)
+        .env("DAYONE_TELEMETRY", "0")
+        .env("FASTEMBED_CACHE_DIR", root.join(".fastembed_cache"))
+        .env("HF_HOME", root.join(".fastembed_cache"))
+        .env("HF_ENDPOINT", "http://127.0.0.1:0")
+        .args(["--profile", "production", "doctor"])
+        .output()
+        .expect("doctor command");
+    assert!(
+        output.status.success(),
+        "doctor preserves its report-only exit status"
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let raw = String::from_utf8(output.stdout).expect("UTF-8 report");
+    assert!(!raw.contains(root.to_str().expect("UTF-8 path")));
+    serde_json::from_str(&raw).expect("doctor report")
+}
+
+fn embedding_index_check(report: &Value) -> &Value {
+    report["checks"]
+        .as_array()
+        .expect("checks")
+        .iter()
+        .find(|check| check["check"] == "embedding_index")
+        .expect("doctor must inspect the embedding index")
+}
+
+#[cfg(feature = "embeddings")]
+#[test]
+fn doctor_embedding_index_counts_missing_stale_and_current_without_mutation() {
+    use sha2::{Digest, Sha256};
+
+    let root = embedding_doctor_fixture();
+    let db = root.path().join("profiles/production/dayone.db");
+    let connection = rusqlite::Connection::open(&db).expect("database");
+    for (id, raw, deleted) in [
+        ("private-missing", r#"{"title":"private missing title"}"#, 0),
+        ("private-stale", r#"{"body":"private changed body"}"#, 0),
+        (
+            "private-current",
+            r#"{"title":"  private title  ","body":" private root body\n","payload":{"body":"\tprivate payload body "}}"#,
+            0,
+        ),
+        (
+            "private-textless",
+            r#"{"title":" ","body":"\n","payload":{"body":"\t","title":"ignored title"},"decrypted_text":"ignored text"}"#,
+            0,
+        ),
+        ("private-empty", "{}", 0),
+        ("private-deleted", r#"{"body":"private deleted body"}"#, 1),
+        ("private-deleted-malformed", "private invalid JSON", 1),
+    ] {
+        connection.execute(
+            "INSERT INTO entries (id, journal_id, data_json, is_deleted) VALUES (?1, 'private-journal', ?2, ?3)",
+            rusqlite::params![id, raw, deleted],
+        ).expect("entry");
+    }
+    let current_hash = format!(
+        "{:x}",
+        Sha256::digest(b"private title\nprivate root body\nprivate payload body")
+    );
+    for (id, hash) in [
+        ("private-stale", "private-old-hash"),
+        ("private-current", current_hash.as_str()),
+    ] {
+        connection.execute(
+            "INSERT INTO entry_embeddings (entry_id, journal_id, source_hash, embedding_json, dimension) VALUES (?1, 'private-journal', ?2, '[]', 384)",
+            rusqlite::params![id, hash],
+        ).expect("embedding metadata");
+    }
+    connection
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .expect("checkpoint");
+    drop(connection);
+    let before = std::fs::read(&db).expect("database before doctor");
+
+    let report = embedding_doctor_report(root.path());
+    let check = embedding_index_check(&report);
+    assert_eq!(check["status"], "finding");
+    assert_eq!(check["details"]["eligible_entries"], 3);
+    assert_eq!(check["details"]["missing_embeddings"], 1);
+    assert_eq!(check["details"]["stale_embeddings"], 1);
+    assert_eq!(check["details"]["current_embeddings"], 1);
+    assert_eq!(check["details"]["unreadable_entries"], 0);
+    assert_eq!(check["details"]["inspection_complete"], true);
+    assert_eq!(check["details"]["model_runtime_checked"], false);
+    assert!(
+        check["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| {
+                finding["action"]
+                    .as_str()
+                    .is_some_and(|action| action.contains("dayone embeddings recalculate-entries"))
+            })
+    );
+    let raw = report.to_string();
+    for forbidden in [
+        "private-",
+        "private title",
+        "private root body",
+        "private payload body",
+        "private changed body",
+        "private missing title",
+        current_hash.as_str(),
+        ".fastembed_cache",
+    ] {
+        assert!(!raw.contains(forbidden), "report leaked {forbidden}");
+    }
+    assert_eq!(std::fs::read(&db).expect("database after doctor"), before);
+    assert_eq!(
+        std::fs::read(root.path().join(".fastembed_cache")).expect("cache blocker"),
+        b"model cache blocker"
+    );
+}
+
+#[cfg(feature = "embeddings")]
+#[test]
+fn doctor_embedding_index_distinguishes_empty_current_stale_and_missing() {
+    use sha2::{Digest, Sha256};
+
+    let root = embedding_doctor_fixture();
+    let report = embedding_doctor_report(root.path());
+    let check = embedding_index_check(&report);
+    assert_eq!(check["status"], "pass");
+    assert_eq!(check["details"]["eligible_entries"], 0);
+    assert_eq!(check["details"]["model_runtime_checked"], false);
+
+    let connection = rusqlite::Connection::open(root.path().join("profiles/production/dayone.db"))
+        .expect("database");
+    connection.execute(
+        "INSERT INTO entries (id, journal_id, data_json) VALUES ('private-current', 'private-journal', ?1)",
+        [r#"{"payload":{"body":" private payload only "}}"#],
+    ).expect("entry");
+    connection.execute(
+        "INSERT INTO entry_embeddings (entry_id, journal_id, source_hash, embedding_json, dimension) VALUES ('private-current', 'private-journal', ?1, '[]', 384)",
+        [format!("{:x}", Sha256::digest(b"private payload only"))],
+    ).expect("embedding metadata");
+    let report = embedding_doctor_report(root.path());
+    let check = embedding_index_check(&report);
+    assert_eq!(check["status"], "pass");
+    assert_eq!(check["details"]["eligible_entries"], 1);
+    assert_eq!(check["details"]["current_embeddings"], 1);
+    assert_eq!(check["details"]["missing_embeddings"], 0);
+    assert_eq!(check["details"]["stale_embeddings"], 0);
+    assert_eq!(check["details"]["inspection_complete"], true);
+    assert_eq!(check["details"]["model_runtime_checked"], false);
+    assert!(check.get("findings").is_none());
+
+    connection
+        .execute(
+            "UPDATE entries SET data_json = ?1",
+            [r#"{"payload":{"body":"private changed text"}}"#],
+        )
+        .expect("changed entry");
+    let report = embedding_doctor_report(root.path());
+    let check = embedding_index_check(&report);
+    assert_eq!(check["status"], "finding");
+    assert_eq!(check["details"]["stale_embeddings"], 1);
+    assert_eq!(check["details"]["missing_embeddings"], 0);
+    assert_eq!(check["details"]["current_embeddings"], 0);
+
+    connection
+        .execute("DELETE FROM entry_embeddings", [])
+        .expect("missing embedding");
+    let report = embedding_doctor_report(root.path());
+    let check = embedding_index_check(&report);
+    assert_eq!(check["status"], "finding");
+    assert_eq!(check["details"]["missing_embeddings"], 1);
+    assert_eq!(check["details"]["stale_embeddings"], 0);
+    assert_eq!(check["details"]["current_embeddings"], 0);
+}
+
+#[cfg(feature = "embeddings")]
+#[test]
+fn doctor_embedding_index_does_not_pass_malformed_or_uninspectable_data() {
+    let root = embedding_doctor_fixture();
+    let connection = rusqlite::Connection::open(root.path().join("profiles/production/dayone.db"))
+        .expect("database");
+    for raw in ["private malformed JSON", "null", "[]"] {
+        connection.execute(
+            "INSERT OR REPLACE INTO entries (id, journal_id, data_json) VALUES ('private-entry', 'private-journal', ?1)",
+            [raw],
+        ).expect("malformed entry");
+        let report = embedding_doctor_report(root.path());
+        let check = embedding_index_check(&report);
+        assert_eq!(check["status"], "fail");
+        assert_eq!(check["details"]["unreadable_entries"], 1);
+        assert_eq!(check["details"]["inspection_complete"], false);
+        assert_eq!(check["details"]["model_runtime_checked"], false);
+        assert!(!report.to_string().contains("private"));
+    }
+    connection
+        .execute_batch("UPDATE entries SET data_json = x'80'")
+        .expect("unreadable column");
+    let report = embedding_doctor_report(root.path());
+    let check = embedding_index_check(&report);
+    assert_eq!(check["status"], "not_run");
+    assert_eq!(check["details"]["reason"], "sqlite_query_failed");
+    assert!(!report.to_string().contains("Invalid column"));
+
+    connection.execute_batch(
+        r#"UPDATE entries SET data_json = '{"body":"private text"}';
+           INSERT INTO entry_embeddings (entry_id, journal_id, source_hash, embedding_json, dimension)
+           VALUES ('private-entry', 'private-journal', x'80', '[]', 384);"#,
+    ).expect("unreadable source hash");
+    let report = embedding_doctor_report(root.path());
+    let check = embedding_index_check(&report);
+    assert_eq!(check["status"], "not_run");
+    assert_eq!(check["details"]["reason"], "sqlite_query_failed");
+    assert!(!report.to_string().contains("private"));
+}
+
+#[cfg(feature = "embeddings")]
+#[test]
+fn doctor_embedding_index_reports_missing_schema_and_database_as_not_run() {
+    let root = embedding_doctor_fixture();
+    let db = root.path().join("profiles/production/dayone.db");
+    let connection = rusqlite::Connection::open(&db).expect("database");
+    connection
+        .execute_batch("DROP TABLE entry_embeddings")
+        .expect("old schema");
+    let report = embedding_doctor_report(root.path());
+    let check = embedding_index_check(&report);
+    assert_eq!(check["status"], "not_run");
+    assert_eq!(check["details"]["reason"], "schema_unavailable");
+
+    connection
+        .execute_batch("CREATE TABLE entry_embeddings (entry_id TEXT)")
+        .expect("incomplete schema");
+    let report = embedding_doctor_report(root.path());
+    let check = embedding_index_check(&report);
+    assert_eq!(check["status"], "not_run");
+    assert_eq!(check["details"]["reason"], "sqlite_query_failed");
+    drop(connection);
+    std::fs::remove_file(db).expect("remove test database");
+    let report = embedding_doctor_report(root.path());
+    let check = embedding_index_check(&report);
+    assert_eq!(check["status"], "not_run");
+    assert_eq!(check["details"]["reason"], "sqlite_unavailable");
+}
+
+#[cfg(not(feature = "embeddings"))]
+#[test]
+fn doctor_embedding_index_is_intentionally_disabled_without_feature() {
+    let root = embedding_doctor_fixture();
+    let connection = rusqlite::Connection::open(root.path().join("profiles/production/dayone.db"))
+        .expect("database");
+    connection.execute(
+        "INSERT INTO entries (id, journal_id, data_json) VALUES ('private-entry', 'private-journal', ?1)",
+        [r#"{"body":"private text without an embedding"}"#],
+    ).expect("entry");
+    let report = embedding_doctor_report(root.path());
+    let check = embedding_index_check(&report);
+    assert_eq!(check["status"], "pass");
+    assert_eq!(check["details"]["enabled"], false);
+    assert_eq!(check["details"]["reason"], "feature_disabled");
+    assert_eq!(check["details"]["model_runtime_checked"], false);
+    assert!(check.get("findings").is_none());
+}

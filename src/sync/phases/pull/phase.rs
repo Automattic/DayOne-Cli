@@ -218,6 +218,7 @@ pub(crate) async fn run_pull_phase<C: DayOneApiClient>(
     feature_flags: &FeatureFlags,
     profile_id: i64,
     user_id: Option<&str>,
+    embeddings: &mut EmbeddingSyncOutput,
 ) -> Result<()> {
     run_singleton_resource(
         store,
@@ -389,7 +390,7 @@ pub(crate) async fn run_pull_phase<C: DayOneApiClient>(
     };
 
     let journal_ids = store.get_sync_enabled_journal_ids()?;
-    let mut embeddings_enabled = crate::entry_embeddings::embeddings_enabled();
+    *embeddings = EmbeddingSyncOutput::new(crate::entry_embeddings::embeddings_enabled());
     for journal_id in journal_ids {
         let resource_key = format!("entries:{journal_id}");
         let entry_path = format!("/v2/sync/entries/{journal_id}/feed");
@@ -413,7 +414,7 @@ pub(crate) async fn run_pull_phase<C: DayOneApiClient>(
                 api_path: &entry_path,
                 static_params: &params,
                 entries_decryptor: entries_decryptor.as_ref(),
-                embeddings_enabled: &mut embeddings_enabled,
+                embeddings,
             },
         )
         .await;

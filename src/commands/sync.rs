@@ -16,6 +16,7 @@ pub struct SyncCommandOutput {
     pub fatal_error: Option<String>,
     #[serde(skip)]
     pub failure: Option<anyhow::Error>,
+    pub embeddings: crate::sync::embeddings::EmbeddingSyncOutput,
     pub resources: Vec<engine::ResourceSyncOutput>,
 }
 
@@ -26,6 +27,7 @@ pub async fn execute(store: &Store, base_url: &str, args: SyncArgs) -> Result<Sy
         locked: output.locked,
         fatal_error: output.fatal_error,
         failure: output.failure,
+        embeddings: output.embeddings,
         resources: output.resources,
     })
 }

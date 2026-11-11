@@ -18,9 +18,6 @@ use serde_json::Value;
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
-use crate::entry_embeddings::{
-    compute_embedding_for_searchable_text, entry_searchable_text, source_hash_for_searchable_text,
-};
 use crate::http::DayOneApiClient;
 use crate::models::{Entry, EntryId, Journal, JournalId, Moment};
 use crate::store::sqlite::{JournalSyncStatus, Store};
@@ -30,6 +27,7 @@ use crate::sync::crypto::{
     UserKeysPayload, build_crypto_context_from_sources, decrypt_payload,
     derive_d1_symmetric_key_from_master_key,
 };
+use crate::sync::embeddings::EmbeddingSyncOutput;
 use crate::sync::engine::{MAX_PAGE_LOOPS, ResourceSyncOutput, log_sync, now_epoch_ms};
 #[derive(Debug, Clone)]
 pub(crate) struct JournalDecryptor {
@@ -55,7 +53,7 @@ struct EntriesFeedResourceParams<'a> {
     api_path: &'a str,
     static_params: &'a [(String, String)],
     entries_decryptor: Option<&'a EntriesDecryptor>,
-    embeddings_enabled: &'a mut bool,
+    embeddings: &'a mut EmbeddingSyncOutput,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

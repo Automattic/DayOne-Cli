@@ -8,6 +8,7 @@ use crate::http::DeviceInfo;
 use crate::store::sqlite::Store;
 use crate::store::user_id_from_session_json;
 use crate::sync::api::SyncApiClient;
+use crate::sync::embeddings::{EmbeddingSyncOutput, EmbeddingSyncStatus};
 use crate::sync::phases::{outbox, pull};
 
 pub(crate) const LOCK_TTL_MS: i64 = 15 * 60 * 1_000;
@@ -35,6 +36,7 @@ pub struct SyncOutput {
     pub fatal_error: Option<String>,
     #[serde(skip)]
     pub failure: Option<anyhow::Error>,
+    pub embeddings: EmbeddingSyncOutput,
     pub resources: Vec<ResourceSyncOutput>,
 }
 
@@ -67,6 +69,7 @@ pub async fn run_sync(
             locked: true,
             fatal_error: None,
             failure: None,
+            embeddings: EmbeddingSyncOutput::default(),
             resources: vec![],
         });
     }
@@ -75,6 +78,7 @@ pub async fn run_sync(
     crate::diagnostics::record_sync_run("started", "success", Some(run_id), sync_started.elapsed());
     log_sync(format!("starting run_id={run_id} base_url={base_url}"));
     let mut resources = Vec::new();
+    let mut embeddings = EmbeddingSyncOutput::default();
 
     let result = async {
         prepare_sync_cursors(store, ignore_existing_cursors)?;
@@ -129,6 +133,7 @@ pub async fn run_sync(
             &feature_flags,
             session.profile_id,
             user_id.as_deref(),
+            &mut embeddings,
         )
         .await;
         crate::diagnostics::record_sync_phase(
@@ -166,19 +171,28 @@ pub async fn run_sync(
     record_resource_diagnostics(&resources);
     match result {
         Ok(()) => {
-            store.finish_sync_run(run_id, true, None)?;
+            let ok = embeddings.status != EmbeddingSyncStatus::Failed;
+            let message = (!ok).then(|| format!(
+                "Search embeddings are incomplete: {} failed, {} skipped. Correct the embedding error, then run dayone embeddings recalculate-entries.",
+                embeddings.failed, embeddings.skipped
+            ));
+            store.finish_sync_run(run_id, ok, message.as_deref())?;
             crate::diagnostics::record_sync_run(
                 "finished",
-                "success",
+                if ok { "success" } else { "error" },
                 Some(run_id),
                 sync_started.elapsed(),
             );
-            log_sync(format!("completed run_id={run_id} status=success"));
+            log_sync(format!(
+                "completed run_id={run_id} status={}",
+                if ok { "success" } else { "failed" }
+            ));
             Ok(SyncOutput {
-                ok: true,
+                ok,
                 locked: false,
                 fatal_error: None,
-                failure: None,
+                failure: message.map(anyhow::Error::msg),
+                embeddings,
                 resources,
             })
         }
@@ -199,6 +213,7 @@ pub async fn run_sync(
                 locked: false,
                 fatal_error: Some(message),
                 failure: Some(err),
+                embeddings,
                 resources,
             })
         }

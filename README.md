@@ -129,6 +129,19 @@ dayone list entries --journal-id <journal-id> --sort-method editDate
 
 ## Common Commands
 
+### Sync results and search embeddings
+
+`dayone sync` reports data resources and search embeddings separately. The JSON `embeddings` object contains `status`, `generated`, `unchanged`, `failed`, `skipped`, and `error`.
+
+- `status` is `success`, `failed`, `disabled` (a build without embeddings), or `not_run` (the run did not reach the entry phase).
+- The counts cover eligible entries processed in this run, not the whole local index. Deleted entries and entries without searchable text do not need embeddings.
+- `unchanged` counts entries with a current source hash. `skipped` counts entries that need an embedding after an earlier embedding failure.
+- `error` is `generation_failed`, `storage_failed`, or `null`. It reports the first embedding failure without entry content or identifiers.
+
+An embedding failure does not stop the data pull or outbox phase. Successful data resources retain their `success` status and cursors. The overall result has `ok: false`, and the command exits with code 1. `fatal_error` remains `null` unless another error aborts the run. Builds without embeddings do not fail because of this intentional omission.
+
+After you correct the model or storage error, run `dayone embeddings recalculate-entries` to repair the local search index. A later sync does not automatically repair embeddings for unchanged entries. Use `dayone doctor` to inspect index coverage.
+
 ### Sync scheduling
 
 Journal and entry workflows are local-first. Listing, searching, and reading entries use the local SQLite store; journal, entry, comment-body, Daily Chat, and context-item changes queue work for `dayone sync`. Authentication, user settings, sync, refreshed comment listings, and comment reactions use the network directly. For normal desktop use, we recommend scheduling automatic sync about every 30 minutes:
@@ -442,6 +455,8 @@ dayone doctor > dayone-doctor.json
 ```
 
 The top-level `status` and `check_counts` support quick triage. Checks report `pass`, `finding`, `fail`, or `not_run`: findings need user context, while failures identify concrete breakage. Individual findings use stable codes plus impact and suggested action; configuration details distinguish an actual config file from built-in fallback defaults.
+
+The `embedding_index` check counts missing, stale, and current source hashes for live entries with searchable text. It suggests `dayone embeddings recalculate-entries` when the index is incomplete. It does not download or initialize a model, validate vector contents, or verify model runtime health. Its results contain aggregate counts only. Doctor retains its report-only exit behavior: inspect the JSON status and findings, not the exit code, for local problems.
 
 Raw journal and entry IDs are excluded by default. For deliberate local investigation, `dayone doctor --include-private-identifiers` includes them and marks the report private; journal names and entry content remain excluded.
 
