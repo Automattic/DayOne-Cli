@@ -20,19 +20,27 @@ mod telemetry;
 #[cfg(test)]
 mod test_util;
 mod tui;
+mod updates;
 mod util;
 
 pub use dayone::convert;
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    crate::env_util::apply_shared_dayone_secrets_from_config();
+    if std::env::args_os().skip(1).eq([updates::WORKER_COMMAND]) {
+        updates::refresh_worker().await;
+        return std::process::ExitCode::SUCCESS;
+    }
     // Hold the guard for the lifetime of `main` so Sentry's transport flushes
     // when `main` returns. `std::process::exit` would skip destructors.
     let mut telemetry = telemetry::TelemetryGuard::default();
-    diagnostics::install_panic_hook();
-
-    let result = cli::run(&mut telemetry).await;
+    let result = if let Some(result) = cli::run_updates().await {
+        result
+    } else {
+        crate::env_util::apply_shared_dayone_secrets_from_config();
+        diagnostics::install_panic_hook();
+        cli::run(&mut telemetry).await
+    };
     let sentry_event_id = match &result {
         Ok(()) => None,
         Err(err) => {

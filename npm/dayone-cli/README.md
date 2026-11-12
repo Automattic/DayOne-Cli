@@ -19,6 +19,14 @@ dayone --version
 
 Standalone binaries are also available from [GitHub Releases](https://github.com/Automattic/DayOne-Cli/releases/latest). Homebrew, Cargo publishing, package marketplaces, and Windows code signing are not part of the first public release.
 
+## Updates and changelog
+
+Run `dayone updates` to check availability and read release notes as JSON without installing anything. Use `--since 0.21.0` to read changes after a specific version, `--channel preview` to include prereleases, or `--offline` to read cached results. The full changelog is in [GitHub Releases](https://github.com/Automattic/DayOne-Cli/releases).
+
+Cached update notices go to stderr for both users and AI agents; stdout stays machine-readable. Set `NO_UPDATE_NOTIFIER=1` to disable automatic checks and notices. Explicit `dayone updates` still checks unless you pass `--offline`.
+
+Update checks contact the public npm registry and GitHub without Day One credentials, account identifiers, journal data, or telemetry events. These services receive normal connection information, including your IP address. See [Updates and release notes](https://github.com/Automattic/DayOne-Cli#updates-and-release-notes) for cache behavior, channels, opt-outs, and the JSON contract.
+
 ## Quick start
 
 ```bash

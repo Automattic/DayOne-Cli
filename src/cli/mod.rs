@@ -64,6 +64,8 @@ enum TopLevelCommand {
     Tui,
     /// Report environment and known local-state problems without modifying user data.
     Doctor(DoctorCliArgs),
+    /// Check for updates and read release notes as JSON. No account required; never installs.
+    Updates(crate::updates::UpdateArgs),
 }
 
 #[derive(Debug, Args)]
@@ -842,8 +844,32 @@ struct WhoAmIOutput {
     user: Value,
 }
 
+/// Release discovery runs before loading shared secrets or account configuration.
+/// Other commands are parsed again after loading their normal environment defaults.
+pub async fn run_updates() -> Option<Result<()>> {
+    let cli = Cli::try_parse().ok()?;
+    if let TopLevelCommand::Updates(args) = cli.command {
+        Some(print_json(&crate::updates::execute(args).await))
+    } else {
+        None
+    }
+}
+
 pub async fn run(telemetry: &mut crate::telemetry::TelemetryGuard) -> Result<()> {
     let cli = Cli::parse();
+    // Preserve the offline contract of local commands and avoid interrupting the TUI.
+    if !matches!(&cli.command, TopLevelCommand::Tui) {
+        let allow_refresh = matches!(
+            &cli.command,
+            TopLevelCommand::Setup | TopLevelCommand::Sync(_) | TopLevelCommand::UserSettings(_)
+        ) || matches!(
+            &cli.command,
+            TopLevelCommand::Auth(AuthCommand {
+                command: AuthSubcommand::Login(_)
+            })
+        );
+        crate::updates::notify(allow_refresh);
+    }
     let command_name = top_level_command_name(&cli.command);
     let subcommand = subcommand_label(&cli.command);
     crate::telemetry::set_command(command_name);
@@ -1067,6 +1093,7 @@ async fn dispatch_command(
         }
         TopLevelCommand::Tui => tui::run(store, profile_name, base_url)?,
         TopLevelCommand::Doctor(_) => unreachable!("handled before config initialization"),
+        TopLevelCommand::Updates(_) => unreachable!("handled before account initialization"),
     }
     Ok(())
 }
@@ -1766,6 +1793,7 @@ fn top_level_command_name(command: &TopLevelCommand) -> &'static str {
         TopLevelCommand::Tui => "tui",
         TopLevelCommand::Doctor(_) => "doctor",
         TopLevelCommand::Comment(_) => "comment",
+        TopLevelCommand::Updates(_) => "updates",
     }
 }
 
@@ -1848,6 +1876,7 @@ fn subcommand_label(command: &TopLevelCommand) -> Option<&'static str> {
         TopLevelCommand::Setup
         | TopLevelCommand::Sync(_)
         | TopLevelCommand::Tui
+        | TopLevelCommand::Updates(_)
         | TopLevelCommand::Doctor(_) => None,
     }
 }

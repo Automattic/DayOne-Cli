@@ -37,6 +37,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
+      - name: Set up Node.js for launcher tests
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Test release notes and npm launcher
+        run: |
+          python3 scripts/test_release_notes.py
+          node --test npm/dayone-cli/run.test.js
+
       - name: Run tests
         run: cargo test --locked
 

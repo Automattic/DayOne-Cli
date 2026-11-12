@@ -90,6 +90,7 @@ impl Collector {
         let mut command = Command::new(env!("CARGO_BIN_EXE_dayone"));
         command
             .env("DAYONE_CONFIG_DIR", dir)
+            .env("NO_UPDATE_NOTIFIER", "1")
             // Explicit values prevent secrets-cli from changing these tests.
             .env("DAYONE_TELEMETRY", "1")
             .env("DO_NOT_TRACK", "0")

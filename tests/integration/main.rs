@@ -14,3 +14,4 @@ mod memory_process;
 mod outbox;
 mod profile;
 mod telemetry_consent;
+mod updates;
