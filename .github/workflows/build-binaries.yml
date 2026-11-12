@@ -158,7 +158,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          release_flags=(--generate-notes)
-          [[ "$TAG" == *-* ]] && release_flags+=(--prerelease)
-          gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" "${release_flags[@]}" \
-            || gh release upload "$TAG" release/* --repo "$GITHUB_REPOSITORY" --clobber
+          repo=https://github.com/Automattic/DayOne-Cli
+          if ! gh release view "$TAG" --repo "$repo" >/dev/null 2>&1; then
+            notes=$(mktemp)
+            trap 'rm -f "$notes"' EXIT
+            python3 scripts/release-notes.py "$TAG" > "$notes"
+            release_flags=(--verify-tag --notes-file "$notes")
+            [[ "${TAG%%+*}" == *-* ]] && release_flags+=(--prerelease)
+            # Buildkite may win this race. Never replace an existing release body.
+            gh release create "$TAG" --repo "$repo" "${release_flags[@]}" \
+              || gh release view "$TAG" --repo "$repo" >/dev/null
+          fi
+          gh release upload "$TAG" release/* --repo "$repo" --clobber
