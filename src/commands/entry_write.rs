@@ -29,6 +29,15 @@ pub struct EntryWriteArgs {
     pub attachments: Vec<PathBuf>,
     pub attachment_types: Vec<MediaType>,
     pub tags: Vec<String>,
+    pub time_zone: Option<chrono_tz::Tz>,
+    pub starred: Option<bool>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub place_name: Option<String>,
+    pub locality_name: Option<String>,
+    pub administrative_area: Option<String>,
+    pub country: Option<String>,
+    pub street_address: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -48,6 +57,7 @@ pub async fn execute(
     base_url: &str,
     args: EntryWriteArgs,
 ) -> Result<EntryWriteOutput> {
+    let location = requested_location(&args)?;
     if !args.attachment_types.is_empty() && args.attachment_types.len() != args.attachments.len() {
         bail!(
             "attachment type count ({}) must match --attach count ({})",
@@ -110,6 +120,20 @@ pub async fn execute(
         now_ms,
         &new_moments,
     )?;
+    if let Some(time_zone) = args.time_zone {
+        if entry_content.get("isAllDay").and_then(Value::as_bool) == Some(true) {
+            bail!(
+                "--time-zone cannot be set on an all-day entry; use an RFC3339 --date for a timed entry"
+            );
+        }
+        entry_content["timeZone"] = Value::String(time_zone.name().to_owned());
+    }
+    if let Some(starred) = args.starred {
+        entry_content["starred"] = Value::Bool(starred);
+    }
+    if let Some(location) = location {
+        entry_content["location"] = location;
+    }
     if !args.tags.is_empty() {
         entry_content["tags"] = serde_json::json!(updated_tags(&entry_content, &args.tags, &[])?);
     }
@@ -149,6 +173,47 @@ pub async fn execute(
         outbox_id,
         synced: false,
     })
+}
+
+fn requested_location(args: &EntryWriteArgs) -> Result<Option<Value>> {
+    let details = [
+        ("--place-name", "placeName", &args.place_name),
+        ("--locality-name", "localityName", &args.locality_name),
+        (
+            "--administrative-area",
+            "administrativeArea",
+            &args.administrative_area,
+        ),
+        ("--country", "country", &args.country),
+        ("--street-address", "streetAddress", &args.street_address),
+    ];
+    let (latitude, longitude) = match (args.latitude, args.longitude) {
+        (Some(latitude), Some(longitude)) => (latitude, longitude),
+        (None, None) => {
+            if details.iter().any(|(_, _, value)| value.is_some()) {
+                bail!("location details require both --latitude and --longitude");
+            }
+            return Ok(None);
+        }
+        _ => bail!("provide both --latitude and --longitude"),
+    };
+    if !latitude.is_finite() || !(-90.0..=90.0).contains(&latitude) {
+        bail!("--latitude must be a finite number between -90 and 90");
+    }
+    if !longitude.is_finite() || !(-180.0..=180.0).contains(&longitude) {
+        bail!("--longitude must be a finite number between -180 and 180");
+    }
+    // A replacement must not retain an address or other details from the old location.
+    let mut location = serde_json::json!({"latitude": latitude, "longitude": longitude});
+    for (flag, field, value) in details {
+        if let Some(value) = value {
+            if value.trim().is_empty() {
+                bail!("{flag} cannot be empty");
+            }
+            location[field] = Value::String(value.clone());
+        }
+    }
+    Ok(Some(location))
 }
 
 #[cfg(test)]
@@ -199,6 +264,15 @@ mod tests {
             attachments: Vec::new(),
             attachment_types: Vec::new(),
             tags: Vec::new(),
+            time_zone: None,
+            starred: None,
+            latitude: None,
+            longitude: None,
+            place_name: None,
+            locality_name: None,
+            administrative_area: None,
+            country: None,
+            street_address: None,
         }
     }
 
