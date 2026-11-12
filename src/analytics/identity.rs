@@ -10,7 +10,8 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use rsa::rand_core::{OsRng, RngCore};
+use getrandom::SysRng;
+use rsa::rand_core::{Rng, UnwrapErr};
 use serde_json::Value;
 
 /// Tracks user id type (`_ut`). Only the anonymous type is ever emitted; the
@@ -45,7 +46,7 @@ impl Identity {
 /// as Day One Web's `newAnonId()`).
 pub(crate) fn new_anonymous_id() -> String {
     let mut bytes = [0u8; 18];
-    OsRng.fill_bytes(&mut bytes);
+    UnwrapErr(SysRng).fill_bytes(&mut bytes);
     BASE64_STANDARD.encode(bytes)
 }
 

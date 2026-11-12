@@ -77,6 +77,14 @@ pub fn current_uid_string() -> std::io::Result<String> {
     Ok(uid)
 }
 
+pub(crate) fn bytes_to_hex_lower(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{:02x}", b));
+    }
+    out
+}
+
 pub fn now_rfc3339_utc() -> String {
     const RFC3339_MILLIS: &str =
         "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z";

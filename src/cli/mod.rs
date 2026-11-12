@@ -161,7 +161,7 @@ struct ProfileSetCliArgs {
 
 #[derive(Debug, Subcommand)]
 enum EntrySubcommand {
-    Write(EntryWriteCliArgs),
+    Write(Box<EntryWriteCliArgs>),
     /// Fetch a single entry from the local store as full JSON. No network.
     #[command(visible_alias = "get")]
     Read(EntryReadCliArgs),
@@ -431,6 +431,42 @@ struct EntryWriteCliArgs {
     /// Add a tag without replacement of current tags. Repeat for multiple tags.
     #[arg(long = "tag")]
     tags: Vec<String>,
+
+    /// IANA display time zone, such as Europe/Athens. Does not change the --date instant.
+    #[arg(long, conflicts_with = "all_day")]
+    time_zone: Option<chrono_tz::Tz>,
+
+    /// Set or clear the star. Omit to preserve the current value.
+    #[arg(long, action = clap::ArgAction::Set)]
+    starred: Option<bool>,
+
+    /// Replace the location. Latitude in degrees, from -90 to 90.
+    #[arg(long, requires = "longitude", allow_negative_numbers = true)]
+    latitude: Option<f64>,
+
+    /// Longitude in degrees, from -180 to 180. Requires --latitude.
+    #[arg(long, requires = "latitude", allow_negative_numbers = true)]
+    longitude: Option<f64>,
+
+    /// Place name for the replacement location. Requires coordinates.
+    #[arg(long, requires = "latitude")]
+    place_name: Option<String>,
+
+    /// City or locality for the replacement location. Requires coordinates.
+    #[arg(long, requires = "latitude")]
+    locality_name: Option<String>,
+
+    /// State or province for the replacement location. Requires coordinates.
+    #[arg(long, requires = "latitude")]
+    administrative_area: Option<String>,
+
+    /// Country for the replacement location. Requires coordinates.
+    #[arg(long, requires = "latitude")]
+    country: Option<String>,
+
+    /// Street address for the replacement location. Requires coordinates.
+    #[arg(long, requires = "latitude")]
+    street_address: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1269,6 +1305,15 @@ async fn dispatch_entry(base_url: &str, entry_cmd: EntryCommand, store: &Store) 
                         })
                         .collect(),
                     tags: args.tags,
+                    time_zone: args.time_zone,
+                    starred: args.starred,
+                    latitude: args.latitude,
+                    longitude: args.longitude,
+                    place_name: args.place_name,
+                    locality_name: args.locality_name,
+                    administrative_area: args.administrative_area,
+                    country: args.country,
+                    street_address: args.street_address,
                 },
             )
             .await?;

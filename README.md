@@ -149,6 +149,8 @@ dayone sync-schedule disable
 
 ### Entries
 
+This section describes the current source. npm version `0.22.1` does not include `entry tag`, `--tag`, or the time-zone, star, and location options below. Check `dayone entry write --help` for the options in your installed binary.
+
 Write an entry:
 
 ```bash
@@ -184,11 +186,30 @@ dayone entry write --journal-id <journal-id> --body "Trip notes" --tag travel --
 
 Each `--tag` adds a tag without replacement of current tags. To remove tags, use `entry tag --remove`.
 
+Set the entry's time zone, star, and location:
+
+```bash
+dayone entry write --journal-id <journal-id> --body "Trip notes" \
+	--date 2026-03-31T09:30:00+03:00 --time-zone Europe/Athens \
+	--starred true --tag travel \
+	--latitude 37.9715 --longitude 23.7257 \
+	--place-name "Acropolis" --locality-name Athens --country Greece
+```
+
+- `--time-zone` accepts an IANA name, such as `Europe/Athens` or `UTC`. It sets the display zone without changing the instant specified by an RFC3339 `--date`. When omitted, timed entry updates preserve the existing zone, even with a new `--date`. New timed entries without this option retain `timeZone: null`.
+- `--starred true` sets the star; `--starred false` clears it. Omit the option to preserve the existing value.
+- `--latitude` and `--longitude` must be supplied together. Both must be finite numbers, with latitude from -90 to 90 and longitude from -180 to 180, inclusive. Negative values work with either `--longitude -74.0060` or `--longitude=-74.0060`.
+- Optional location details are `--place-name`, `--locality-name`, `--administrative-area`, `--country`, and `--street-address`. They require coordinates and cannot be blank. Coordinates replace the entire location, including old details not supplied in the command. Omit coordinates to preserve the existing location. The CLI does not geocode addresses or infer a time zone from coordinates.
+
+These options work with tags and attachments. `entry write` still requires `--body` or `--body-stdin`, including when updating metadata on an existing entry.
+
 Write an all-day entry (time ignored on display):
 
 ```bash
 dayone entry write --journal-id <journal-id> --date 2026-03-31T09:30:00Z --all-day --body "Daily summary"
 ```
+
+A date-only `--date YYYY-MM-DD` also creates an all-day entry. All-day entries use an empty time zone and reject `--time-zone`. To give an existing all-day entry a time and zone, supply an RFC3339 `--date` and `--time-zone` without `--all-day`.
 
 Write an entry with attachments (repeat `--attach`):
 
@@ -465,7 +486,7 @@ Important limits:
 - Some sync failures require manual outbox inspection; not every conflict is automatically resolved.
 - macOS Intel, Windows x64, and Linux `-no-embeddings` builds do not provide semantic embedding search. Keyword search remains available.
 - Windows x64 is supported, but Windows code signing is not part of the first release; SmartScreen may warn on a downloaded binary.
-- Homebrew, Cargo publishing, package marketplaces, MCP, location editing, and full native-app feature parity are not launch features.
+- Homebrew, Cargo publishing, package marketplaces, MCP, automatic location detection, geocoding, and full native-app feature parity are not launch features.
 
 ## Output and notes
 
