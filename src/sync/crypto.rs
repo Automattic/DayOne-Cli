@@ -1,3 +1,4 @@
+use crate::util::bytes_to_hex_lower;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{Read, Write};
@@ -8,15 +9,16 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use flate2::read::GzDecoder;
 use flate2::{Compression, write::GzEncoder};
+use getrandom::SysRng;
 use md5::{Digest, Md5};
 use pbkdf2::pbkdf2_hmac_array;
 use rsa::pkcs1::DecodeRsaPrivateKey;
 use rsa::pkcs1::DecodeRsaPublicKey;
 use rsa::pkcs8::DecodePrivateKey;
 use rsa::pkcs8::DecodePublicKey;
-use rsa::rand_core::{OsRng, RngCore};
+use rsa::rand_core::{Rng, UnwrapErr};
 use rsa::traits::PublicKeyParts;
-use rsa::{Oaep, RsaPrivateKey, RsaPublicKey};
+use rsa::{Oaep, PrivateKey, PublicKey};
 use serde_json::Value;
 use sha1::Sha1;
 use sha2::Sha256;
@@ -63,8 +65,8 @@ fn e2e_key_material_unavailable_error(reason: impl Into<String>) -> anyhow::Erro
 pub struct CryptoContext {
     pub master_key: Option<String>,
     d1_symmetric_key: Option<[u8; 32]>,
-    d1_content_private_keys: HashMap<String, RsaPrivateKey>,
-    active_content_public_key: Option<(String, RsaPublicKey)>,
+    d1_content_private_keys: HashMap<String, PrivateKey>,
+    active_content_public_key: Option<(String, PublicKey)>,
     active_content_public_key_error: Option<String>,
 }
 
@@ -450,7 +452,7 @@ fn resolve_journal_content_public_key(
     journal: &Value,
     master_key: Option<&str>,
     user_keys_json: Option<&str>,
-) -> Result<Option<(String, RsaPublicKey)>> {
+) -> Result<Option<(String, PublicKey)>> {
     let Some(vault) = journal
         .get("encryption")
         .and_then(|v| v.get("vault"))
@@ -577,7 +579,7 @@ pub(crate) fn encrypt_journal_metadata_for_push(
 
 fn decrypt_vault_key(
     vault: &serde_json::Map<String, Value>,
-    user_private_key: &RsaPrivateKey,
+    user_private_key: &PrivateKey,
 ) -> Result<Option<Vec<u8>>> {
     let Some(grants) = vault.get("grants").and_then(Value::as_array) else {
         return Ok(None);
@@ -588,7 +590,7 @@ fn decrypt_vault_key(
             continue;
         };
         let encrypted = BASE64_STANDARD.decode(encrypted_vault_key)?;
-        if let Ok(vault_key) = user_private_key.decrypt(Oaep::new::<Sha1>(), &encrypted) {
+        if let Ok(vault_key) = user_private_key.decrypt(Oaep::<Sha1>::new(), &encrypted) {
             return Ok(Some(vault_key));
         }
     }
@@ -598,7 +600,7 @@ fn decrypt_vault_key(
 fn load_journal_content_public_key(
     vault: &serde_json::Map<String, Value>,
     vault_key: &[u8],
-) -> Result<(String, rsa::RsaPublicKey)> {
+) -> Result<(String, rsa::PublicKey)> {
     let keys = vault
         .get("keys")
         .and_then(Value::as_array)
@@ -623,7 +625,7 @@ fn load_journal_content_public_key(
 fn encrypt_entry_payload_d1_mode2(
     plaintext_json: &[u8],
     fingerprint_hex: &str,
-    content_public_key: &rsa::RsaPublicKey,
+    content_public_key: &rsa::PublicKey,
 ) -> Result<Vec<u8>> {
     let fingerprint_bytes = decode_hex_to_bytes(fingerprint_hex)?;
     if fingerprint_bytes.len() != 32 {
@@ -634,7 +636,7 @@ fn encrypt_entry_payload_d1_mode2(
     gz.write_all(plaintext_json)?;
     let compressed = gz.finish()?;
 
-    let mut rng = OsRng;
+    let mut rng = UnwrapErr(SysRng);
     let mut content_key = [0_u8; 32];
     rng.fill_bytes(&mut content_key);
     let mut iv = [0_u8; 12];
@@ -645,7 +647,7 @@ fn encrypt_entry_payload_d1_mode2(
     let ciphertext_and_tag = cipher
         .encrypt((&iv).into(), compressed.as_slice())
         .map_err(|_| anyhow!("failed to encrypt entry content"))?;
-    let wrapped_key = content_public_key.encrypt(&mut rng, Oaep::new::<Sha1>(), &content_key)?;
+    let wrapped_key = content_public_key.encrypt(&mut rng, Oaep::<Sha1>::new(), &content_key)?;
 
     let mut out = Vec::new();
     out.extend_from_slice(b"D1");
@@ -746,7 +748,7 @@ fn load_content_private_keys(
     user_identity_key_json: &str,
     content_key_bundle_json: &str,
     symmetric_key: &[u8; 32],
-) -> HashMap<String, RsaPrivateKey> {
+) -> HashMap<String, PrivateKey> {
     let mut map = HashMap::new();
     let Some(user_identity_key) = parse_user_keys_payload(user_identity_key_json) else {
         return map;
@@ -802,7 +804,7 @@ fn load_content_private_keys(
     map
 }
 
-fn load_active_content_public_key(user_keys_json: Option<&str>) -> Option<(String, RsaPublicKey)> {
+fn load_active_content_public_key(user_keys_json: Option<&str>) -> Option<(String, PublicKey)> {
     let json = user_keys_json?;
     let payload = parse_user_keys_payload(json)?;
     let active_fingerprint = payload.active_content_key_fingerprint()?.to_owned();
@@ -1091,7 +1093,7 @@ fn to_32_byte_array(bytes: &[u8]) -> Result<[u8; 32]> {
 
 fn new_random_shared_key() -> [u8; 32] {
     let mut out = [0_u8; 32];
-    let mut rng = OsRng;
+    let mut rng = UnwrapErr(SysRng);
     rng.fill_bytes(&mut out);
     out
 }
@@ -1123,7 +1125,7 @@ fn decrypt_d1_with_context(input_b64: &str, ctx: &CryptoContext) -> Result<Vec<u
 
 fn decrypt_d1_mode1_with_private_keys(
     d1_payload: &[u8],
-    private_keys: &HashMap<String, RsaPrivateKey>,
+    private_keys: &HashMap<String, PrivateKey>,
 ) -> Result<Vec<u8>> {
     if d1_payload.len() < 4 + 32 + 2 + 12 + 16 + 16 {
         bail!("d1 mode1 payload too short");
@@ -1155,7 +1157,7 @@ fn decrypt_d1_mode1_with_private_keys(
     }
     let ciphertext_and_tag = &d1_payload[offset..body_end];
 
-    let content_key = private_key.decrypt(Oaep::new::<Sha1>(), locked_key)?;
+    let content_key = private_key.decrypt(Oaep::<Sha1>::new(), locked_key)?;
     if content_key.len() != 32 {
         bail!("unexpected content key size {}", content_key.len());
     }
@@ -1174,7 +1176,7 @@ fn decrypt_d1_mode1_with_private_keys(
     Ok(decrypted)
 }
 
-fn decrypt_d1_mode1_with_rsa_key(input_b64: &str, private_key: &RsaPrivateKey) -> Result<Vec<u8>> {
+fn decrypt_d1_mode1_with_rsa_key(input_b64: &str, private_key: &PrivateKey) -> Result<Vec<u8>> {
     let d1_payload = BASE64_STANDARD.decode(input_b64)?;
     if d1_payload.len() < 4 + 32 + 2 + 12 + 16 + 16 {
         bail!("d1 mode1 payload too short");
@@ -1202,7 +1204,7 @@ fn decrypt_d1_mode1_with_rsa_key(input_b64: &str, private_key: &RsaPrivateKey) -
     let body_end = d1_payload.len() - 16; // strip checksum
     let ciphertext_and_tag = &d1_payload[offset..body_end];
 
-    let content_key = private_key.decrypt(Oaep::new::<Sha1>(), locked_key)?;
+    let content_key = private_key.decrypt(Oaep::<Sha1>::new(), locked_key)?;
     if content_key.len() != 32 {
         bail!("unexpected content key size {}", content_key.len());
     }
@@ -1214,44 +1216,36 @@ fn decrypt_d1_mode1_with_rsa_key(input_b64: &str, private_key: &RsaPrivateKey) -
     Ok(decrypted)
 }
 
-pub(crate) fn bytes_to_hex_lower(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{:02x}", b));
-    }
-    out
-}
-
-fn parse_private_key_pem(pem: &str) -> Result<RsaPrivateKey> {
-    if let Ok(pkcs8_key) = RsaPrivateKey::from_pkcs8_pem(pem) {
+fn parse_private_key_pem(pem: &str) -> Result<PrivateKey> {
+    if let Ok(pkcs8_key) = PrivateKey::from_pkcs8_pem(pem) {
         return Ok(pkcs8_key);
     }
-    Ok(RsaPrivateKey::from_pkcs1_pem(pem)?)
+    Ok(PrivateKey::from_pkcs1_pem(pem)?)
 }
 
-fn parse_public_key_pem(pem: &str) -> Result<RsaPublicKey> {
-    if let Ok(pkcs8_key) = RsaPublicKey::from_public_key_pem(pem) {
+fn parse_public_key_pem(pem: &str) -> Result<PublicKey> {
+    if let Ok(pkcs8_key) = PublicKey::from_public_key_pem(pem) {
         return Ok(pkcs8_key);
     }
-    Ok(RsaPublicKey::from_pkcs1_pem(pem)?)
+    Ok(PublicKey::from_pkcs1_pem(pem)?)
 }
 
-pub(crate) fn parse_private_key_bytes(bytes: &[u8]) -> Result<RsaPrivateKey> {
+pub(crate) fn parse_private_key_bytes(bytes: &[u8]) -> Result<PrivateKey> {
     if let Ok(pem) = std::str::from_utf8(bytes)
         && let Ok(key) = parse_private_key_pem(pem)
     {
         return Ok(key);
     }
-    if let Ok(pkcs8_key) = RsaPrivateKey::from_pkcs8_der(bytes) {
+    if let Ok(pkcs8_key) = PrivateKey::from_pkcs8_der(bytes) {
         return Ok(pkcs8_key);
     }
-    Ok(RsaPrivateKey::from_pkcs1_der(bytes)?)
+    Ok(PrivateKey::from_pkcs1_der(bytes)?)
 }
 
 fn encrypt_d1_mode1_with_public_key(
     plaintext: &[u8],
     fingerprint_hex: &str,
-    public_key: &RsaPublicKey,
+    public_key: &PublicKey,
 ) -> Result<Vec<u8>> {
     let fingerprint_bytes = decode_hex_to_bytes(fingerprint_hex)?;
     if fingerprint_bytes.len() != 32 {
@@ -1260,7 +1254,7 @@ fn encrypt_d1_mode1_with_public_key(
 
     let payload = plaintext.to_vec();
 
-    let mut rng = OsRng;
+    let mut rng = UnwrapErr(SysRng);
     let mut content_key = [0_u8; 32];
     rng.fill_bytes(&mut content_key);
     let mut iv = [0_u8; 12];
@@ -1271,7 +1265,7 @@ fn encrypt_d1_mode1_with_public_key(
     let ciphertext_and_tag = cipher
         .encrypt((&iv).into(), payload.as_slice())
         .map_err(|_| anyhow!("failed to encrypt d1 mode1 payload"))?;
-    let wrapped_key = public_key.encrypt(&mut rng, Oaep::new::<Sha1>(), &content_key)?;
+    let wrapped_key = public_key.encrypt(&mut rng, Oaep::<Sha1>::new(), &content_key)?;
 
     let mut out = Vec::new();
     out.extend_from_slice(b"D1");
@@ -1291,7 +1285,7 @@ fn encrypt_d1_mode1_with_public_key(
 
 pub(crate) fn encrypt_d1_mode0_with_key(plaintext: &[u8], key_bytes: &[u8; 32]) -> Result<String> {
     let mut iv = [0_u8; 12];
-    let mut rng = OsRng;
+    let mut rng = UnwrapErr(SysRng);
     rng.fill_bytes(&mut iv);
 
     let key = <&aes_gcm::Key<Aes256Gcm>>::try_from(key_bytes)?;
@@ -1352,7 +1346,7 @@ pub(crate) fn decrypt_d1_mode0_with_key(input_b64: &str, key_bytes: &[u8]) -> Re
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
-    use rsa::RsaPrivateKey;
+    use rsa::PrivateKey;
     use rsa::pkcs1::EncodeRsaPrivateKey;
     use serde_json::json;
 
@@ -1372,7 +1366,7 @@ pub(crate) mod test_support {
         pub(crate) journal: Value,
         pub(crate) master_key: String,
         pub(crate) user_keys_json: String,
-        pub(crate) journal_private_key: RsaPrivateKey,
+        pub(crate) journal_private_key: PrivateKey,
         pub(crate) fingerprint_hex: String,
     }
 
@@ -1380,12 +1374,11 @@ pub(crate) mod test_support {
     /// exercise the real key hierarchy: master key → user key → vault key →
     /// journal content key.
     pub(crate) fn build_e2e_journal_fixture() -> E2eJournalFixture {
-        let mut rng = OsRng;
+        let mut rng = UnwrapErr(SysRng);
         let derived = derive_d1_symmetric_key_from_master_key(TEST_MASTER_KEY)
             .expect("master key should derive symmetric key");
 
-        let user_private =
-            RsaPrivateKey::new(&mut rng, 2048).expect("user rsa key should generate");
+        let user_private = PrivateKey::new(&mut rng, 2048).expect("user rsa key should generate");
         let user_public = user_private.to_public_key();
         // Stored as PKCS#1 PEM (text) — the pull-side decryptor unlocks the user
         // key via `String::from_utf8` + PEM parse, while the push side accepts
@@ -1398,7 +1391,7 @@ pub(crate) mod test_support {
                 .expect("user private key should D1-encrypt");
 
         let journal_private =
-            RsaPrivateKey::new(&mut rng, 2048).expect("journal rsa key should generate");
+            PrivateKey::new(&mut rng, 2048).expect("journal rsa key should generate");
         let journal_private_der = journal_private
             .to_pkcs1_der()
             .expect("journal private key should encode")
@@ -1408,7 +1401,7 @@ pub(crate) mod test_support {
         let mut vault_key = [0_u8; 32];
         rng.fill_bytes(&mut vault_key);
         let encrypted_vault_key = user_public
-            .encrypt(&mut rng, Oaep::new::<Sha1>(), &vault_key)
+            .encrypt(&mut rng, Oaep::<Sha1>::new(), &vault_key)
             .expect("vault key should wrap to user public key");
 
         let journal_encrypted_private_key =
@@ -1455,7 +1448,7 @@ pub(crate) mod test_support {
     /// private key, mirroring what the pull side / web client do.
     pub(crate) fn decrypt_media_with_journal_key(
         blob: &[u8],
-        journal_private_key: &RsaPrivateKey,
+        journal_private_key: &PrivateKey,
         fingerprint_hex: &str,
     ) -> Vec<u8> {
         let mut private_keys = HashMap::new();
@@ -1470,7 +1463,7 @@ mod tests {
     use super::test_support::{TEST_MASTER_KEY, build_e2e_journal_fixture};
     use super::*;
     use aes_gcm::aead::Generate;
-    use rsa::RsaPrivateKey;
+    use rsa::PrivateKey;
     use serde_json::json;
 
     #[test]
@@ -1888,8 +1881,8 @@ mod tests {
 
     #[test]
     fn encrypts_entry_payload_mode2_with_md5_suffix() {
-        let mut rng = OsRng;
-        let private = RsaPrivateKey::new(&mut rng, 2048).expect("rsa key should generate");
+        let mut rng = UnwrapErr(SysRng);
+        let private = PrivateKey::new(&mut rng, 2048).expect("rsa key should generate");
         let public = private.to_public_key();
         let fingerprint_hex =
             "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".to_owned();
@@ -1919,7 +1912,7 @@ mod tests {
         let ciphertext_and_tag = &encrypted[offset..md5_start];
 
         let content_key = private
-            .decrypt(Oaep::new::<Sha1>(), wrapped_key)
+            .decrypt(Oaep::<Sha1>::new(), wrapped_key)
             .expect("wrapped key should decrypt");
         let key = <&aes_gcm::Key<Aes256Gcm>>::try_from(content_key.as_slice())
             .expect("content key should be 32 bytes");
@@ -1939,8 +1932,8 @@ mod tests {
 
     #[test]
     fn encrypt_and_decrypt_daily_chat_payload_round_trip() {
-        let mut rng = OsRng;
-        let private = RsaPrivateKey::new(&mut rng, 2048).expect("rsa key should generate");
+        let mut rng = UnwrapErr(SysRng);
+        let private = PrivateKey::new(&mut rng, 2048).expect("rsa key should generate");
         let public = private.to_public_key();
         let fingerprint_hex =
             "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".to_owned();
@@ -1998,8 +1991,8 @@ mod tests {
 
     #[test]
     fn encrypt_daily_chat_fails_when_shared_key_invalid_for_encrypted_history() {
-        let mut rng = OsRng;
-        let private = RsaPrivateKey::new(&mut rng, 2048).expect("rsa key should generate");
+        let mut rng = UnwrapErr(SysRng);
+        let private = PrivateKey::new(&mut rng, 2048).expect("rsa key should generate");
         let public = private.to_public_key();
         let fingerprint_hex =
             "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".to_owned();
@@ -2038,8 +2031,8 @@ mod tests {
 
     #[test]
     fn encrypt_daily_chat_fails_when_encrypted_history_has_no_shared_key() {
-        let mut rng = OsRng;
-        let public = RsaPrivateKey::new(&mut rng, 2048)
+        let mut rng = UnwrapErr(SysRng);
+        let public = PrivateKey::new(&mut rng, 2048)
             .expect("rsa key should generate")
             .to_public_key();
         let fingerprint_hex =
@@ -2066,8 +2059,8 @@ mod tests {
 
     #[test]
     fn encrypt_daily_chat_fails_when_encrypted_message_cannot_be_decrypted_by_shared_key() {
-        let mut rng = OsRng;
-        let public = RsaPrivateKey::new(&mut rng, 2048)
+        let mut rng = UnwrapErr(SysRng);
+        let public = PrivateKey::new(&mut rng, 2048)
             .expect("rsa key should generate")
             .to_public_key();
         let fingerprint_hex =

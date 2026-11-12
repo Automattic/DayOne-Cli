@@ -7,6 +7,8 @@
 
 use md5::{Digest, Md5};
 
+use crate::util::bytes_to_hex_lower;
+
 const APP_ID: &str = "com.bloombuilt.dayone-cli";
 const PRODUCT_NAME: &str = "dayone-cli";
 const DEFAULT_LANGUAGE: &str = "en-US";
@@ -69,7 +71,7 @@ fn fingerprint(os: &str, arch: &str, hostname: &str, user_id: Option<&str>) -> S
         parts.push(user_id.to_owned());
     }
     let joined = parts.join("::");
-    format!("{:x}", Md5::digest(joined.as_bytes()))
+    bytes_to_hex_lower(&Md5::digest(joined.as_bytes()))
 }
 
 fn current_hostname() -> String {
@@ -147,6 +149,8 @@ mod tests {
         let c = fingerprint("macos", "aarch64", "host", Some("user-2"));
         let none = fingerprint("macos", "aarch64", "host", None);
 
+        assert_eq!(a, "ff429f4ec30eded22ddc55416568b87e");
+        assert_eq!(none, "0834a9b20978bd375b1d6da855ae0e11");
         assert_eq!(a, b, "same inputs should hash identically");
         assert_ne!(a, c, "different user should change the fingerprint");
         assert_ne!(a, none, "missing user should change the fingerprint");
