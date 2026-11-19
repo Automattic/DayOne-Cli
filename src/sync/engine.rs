@@ -8,6 +8,7 @@ use crate::http::DeviceInfo;
 use crate::store::sqlite::Store;
 use crate::store::user_id_from_session_json;
 use crate::sync::api::SyncApiClient;
+use crate::sync::phases::media::{self, MediaSyncMode, MediaSyncOutput};
 use crate::sync::phases::{outbox, pull};
 
 pub(crate) const LOCK_TTL_MS: i64 = 15 * 60 * 1_000;
@@ -36,6 +37,9 @@ pub struct SyncOutput {
     #[serde(skip)]
     pub failure: Option<anyhow::Error>,
     pub resources: Vec<ResourceSyncOutput>,
+    /// Present only when the run was asked to download media (`--media`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaSyncOutput>,
 }
 
 fn prepare_sync_cursors(store: &Store, ignore_existing_cursors: bool) -> Result<()> {
@@ -53,6 +57,7 @@ pub async fn run_sync(
     store: &Store,
     base_url: &str,
     ignore_existing_cursors: bool,
+    media_mode: Option<MediaSyncMode>,
 ) -> Result<SyncOutput> {
     let sync_started = Instant::now();
     let session = store
@@ -68,6 +73,7 @@ pub async fn run_sync(
             fatal_error: None,
             failure: None,
             resources: vec![],
+            media: None,
         });
     }
 
@@ -75,6 +81,7 @@ pub async fn run_sync(
     crate::diagnostics::record_sync_run("started", "success", Some(run_id), sync_started.elapsed());
     log_sync(format!("starting run_id={run_id} base_url={base_url}"));
     let mut resources = Vec::new();
+    let mut media_output = None;
 
     let result = async {
         prepare_sync_cursors(store, ignore_existing_cursors)?;
@@ -158,6 +165,27 @@ pub async fn run_sync(
             outbox_started.elapsed(),
         );
         outbox_result?;
+
+        if let Some(mode) = media_mode {
+            let media_started = Instant::now();
+            let output =
+                media::run_media_phase(&api, store, session.profile_id, user_id.as_deref(), mode)
+                    .await;
+            crate::diagnostics::record_sync_phase(
+                "media",
+                if output.has_failures() {
+                    "error"
+                } else {
+                    "success"
+                },
+                media_started.elapsed(),
+            );
+            log_sync(format!(
+                "media: downloaded={} skipped={} not_on_server={} failed={}",
+                output.downloaded, output.skipped, output.not_on_server, output.failed
+            ));
+            media_output = Some(output);
+        }
         Ok::<(), anyhow::Error>(())
     }
     .await;
@@ -180,6 +208,7 @@ pub async fn run_sync(
                 fatal_error: None,
                 failure: None,
                 resources,
+                media: media_output,
             })
         }
         Err(err) => {
@@ -200,6 +229,7 @@ pub async fn run_sync(
                 fatal_error: Some(message),
                 failure: Some(err),
                 resources,
+                media: media_output,
             })
         }
     }

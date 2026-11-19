@@ -23,6 +23,14 @@ pub(crate) fn entry_edit_lock_path(journal_id: &str, entry_id: &str) -> String {
     )
 }
 
+pub(crate) fn moment_download_path(journal_id: &str, moment_id: &str) -> String {
+    format!(
+        "/journals/{}/attachments/{}/download",
+        encode_path_segment(journal_id),
+        encode_path_segment(moment_id)
+    )
+}
+
 #[derive(Clone, Debug)]
 pub struct MultipartBinaryPart {
     pub name: String,
@@ -67,6 +75,19 @@ pub trait DayOneApiClient: Send + Sync {
             extra_parts,
         );
         bail!("multipart entry upload is not supported by this client")
+    }
+
+    /// Downloads the stored bytes of a moment's original (or its thumbnail).
+    /// For end-to-end encrypted journals these are still D1 ciphertext.
+    /// Returns `Ok(None)` when the server has no bytes for the moment (404).
+    async fn download_media(
+        &self,
+        journal_id: &str,
+        moment_id: &str,
+        thumbnail: bool,
+    ) -> Result<Option<Vec<u8>>> {
+        let _ = (journal_id, moment_id, thumbnail);
+        bail!("media download is not supported by this client")
     }
 
     async fn put_file_to_absolute_url(

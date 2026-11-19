@@ -720,7 +720,6 @@ pub(crate) fn decrypt_entry_d1_payload(
 /// content key is wrapped to the journal content key), so the journal keys held
 /// by [`EntriesDecryptor`] are sufficient to decrypt them. Unlike entry
 /// content, media is never gzip-compressed (format 1, not format 2).
-#[allow(dead_code)]
 pub(crate) fn decrypt_original_media(
     d1_payload: &[u8],
     decryptor: &EntriesDecryptor,

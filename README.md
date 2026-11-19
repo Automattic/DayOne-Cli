@@ -117,6 +117,15 @@ dayone sync-schedule status
 
 This installs a per-user schedule using the native scheduler for your OS (macOS LaunchAgent, Linux systemd user timer, or Windows Task Scheduler) and does not require admin privileges for the normal current-user setup.
 
+Entries sync with their media metadata only; photos, videos, audio, and PDFs are not downloaded unless you ask. To download them too, opt in per run:
+
+```bash
+dayone sync --media               # originals and thumbnails
+dayone sync --media=thumbnails    # thumbnails only (much smaller)
+```
+
+See [Downloading media](#downloading-media).
+
 5) Start using data:
 
 ```bash
@@ -163,6 +172,8 @@ dayone entry write --journal-id <journal-id> --entry-id <entry-id> --body "Updat
 ```
 
 `entry read` (alias `entry get`) returns local entry content, tags, and the journal ID as JSON. It does not contact the server. Run `dayone sync` first to fetch remote entries. Add `--journal-id <journal-id>` to require a specific journal.
+
+If a moment's media was downloaded with `dayone sync --media`, `entry read` adds `local_path` (and `thumbnail.local_path`) to that entry's `moments[]`: absolute paths to the decrypted files. Moments without a downloaded file are unchanged.
 
 Writes are local-first: they update the profile's SQLite store and queue an outbox item. Run `dayone sync` (or enable `sync-schedule`) to send them to Day One.
 
@@ -433,6 +444,23 @@ dayone outbox clear --failed
 
 Local entry data is not deleted or restored from the server by `outbox clear`, but the cleared operation will not sync unless another local edit queues it again. A later successful sync does not imply that all previously failed items were resolved; inspect `outbox list` for retained failures.
 
+### Downloading media
+
+`dayone sync` never downloads media by default. Add `--media` to also fetch the files for every synced entry:
+
+```bash
+dayone sync --media               # originals and thumbnails
+dayone sync --media=thumbnails    # thumbnails only
+```
+
+- Files are written under the profile directory in `media/<journal-id>/<entry-id>/<moment-id>.<ext>` (thumbnails as `<moment-id>.thumb.<ext>`). Directories are created `0700` and files `0600`, like the rest of the profile.
+- Media in end-to-end encrypted journals is decrypted locally with your journal keys; run `dayone auth key-set` and sync first, as for entry text. Without the key those files fail with a clear error and nothing encrypted is written to disk.
+- Runs are resumable and idempotent: a file that is already present at its recorded size, for the same media version, is skipped, so you can re-run `sync --media` (or schedule it) at any time. Up to 4 files download in parallel; rate-limit (`429`) and `5xx` responses are retried with backoff.
+- One failing file never stops the others. The JSON output gains a `media` object with `files_total`, `downloaded`, `skipped`, `not_on_server` (the server has no bytes yet, for example while another device is still uploading), `failed`, `bytes_downloaded`, and up to 50 `failures`. If any file failed, the command still prints the full JSON but exits non-zero; the next `sync --media` retries them.
+- Each file is held in memory while it is downloaded and decrypted, so a very large video needs that much free RAM at that moment. Streaming to disk is planned as a follow-up (#53).
+- `entry read` reports the local file paths, and `dayone doctor` counts downloaded photos in `attachments` and their disk usage in `media_bytes`. `doctor` reports only counts and byte totals, never paths, file names, or IDs.
+- Deleting an entry or journal locally also removes its downloaded files. Downloads are held in memory while being decrypted, so very large videos need that much free RAM.
+
 ### Collecting diagnostics
 
 `doctor` prints a privacy-safe JSON report of the CLI build, platform, configuration health, SQLite availability, aggregate local-data counts, session/key-storage state, sync metadata, and known local problems. It does not contact the Day One API, migrate or repair the database, or read Keychain secrets:
@@ -473,6 +501,7 @@ Important limits:
 - `sync` progress logs are written to stderr with `[sync]` prefixes.
 - Auth/session data is persisted locally in SQLite.
 - Encryption master keys use the system credential store when available. SQLite fallback occurs when secure storage is unavailable or verification fails; headless authorization requirements fail instead.
+- Media downloads are opt-in (`sync --media`); see [Downloading media](#downloading-media).
 - Attachment uploads are local-first: `entry write` queues metadata and originals; `sync` uploads entry metadata first, then original binaries.
 - Attachment constraints: max `500MB` per file, with supported families image/video/audio/pdf.
 
