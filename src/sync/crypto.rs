@@ -244,6 +244,29 @@ impl UserContentKey {
     }
 }
 
+/// Unlock and validate account identity keys consistently for joining and sync.
+/// Both PEM and DER private-key encodings occur in synced key payloads.
+pub(crate) fn unlock_user_identity_key(
+    payload: &UserKeysPayload,
+    derived_master_key: &[u8; 32],
+) -> Result<Option<RsaPrivateKey>> {
+    let Some(encrypted) = payload.encrypted_private_key() else {
+        return Ok(None);
+    };
+    let private =
+        parse_private_key_bytes(&decrypt_d1_mode0_with_key(encrypted, derived_master_key)?)?;
+    let public = private.to_public_key();
+    if public.n().bits() != 2048 {
+        bail!("RSA user key must be 2048 bits");
+    }
+    if let Some(expected) = payload.user_public_key()
+        && parse_public_key_pem(expected)? != public
+    {
+        bail!("user public key does not match unlocked private key");
+    }
+    Ok(Some(private))
+}
+
 #[cfg(test)]
 pub fn build_crypto_context(
     master_key: Option<String>,

@@ -263,6 +263,23 @@ impl Store {
         &self,
         base_url: &str,
     ) -> StoreResult<Option<AuthSession>> {
+        self.lookup_auth_session(base_url, self.is_profile_store)
+    }
+
+    /// Require saved endpoint equality even in per-profile stores. Sensitive
+    /// invitation requests must not reuse a token through an API-host override.
+    pub fn get_auth_session_for_exact_base_url(
+        &self,
+        base_url: &str,
+    ) -> StoreResult<Option<AuthSession>> {
+        self.lookup_auth_session(base_url, false)
+    }
+
+    fn lookup_auth_session(
+        &self,
+        base_url: &str,
+        allow_profile_override: bool,
+    ) -> StoreResult<Option<AuthSession>> {
         let normalized = normalize_base_url(base_url)
             .map_err(|err| StoreError::invalid_input(err.to_string()))?;
         let conn = self.connect()?;
@@ -276,7 +293,7 @@ impl Store {
             ORDER BY s.updated_at DESC
             LIMIT 1
             "#,
-            params![normalized, self.is_profile_store],
+            params![normalized, allow_profile_override],
             |row| {
                 Ok(AuthSession {
                     profile_id: row.get(0)?,

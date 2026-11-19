@@ -1,6 +1,6 @@
 # journal
 
-Create or update a journal. Both are local-first writes: they persist to the
+Create, update, or request to join a journal. `create` and `update` are local-first writes: they persist to the
 local SQLite store and queue an outbox item — **run `dayone sync` afterward** to
 push to the server.
 
@@ -23,6 +23,7 @@ dayone journal update --journal-id <id> [--name <text>] [--description <text>] [
 |------------|---------|
 | `create` | Create a new journal (plaintext or end-to-end encrypted); prints JSON result. |
 | `update` | Modify an existing journal's metadata; prints JSON result. |
+| `join` | Request access using a complete invitation link (online); prints JSON status. |
 
 > [!NOTE]
 > `--json`/`--json-file` accept an **allowlist** of editable metadata fields:
@@ -106,3 +107,31 @@ dayone sync
 > After `dayone sync` the server returns a numeric id — use that resolved id
 > (from `dayone list journals`) for `journal update` and other journal-scoped
 > commands.
+
+## `join`
+
+```bash
+dayone journal join 'https://dayone.me/accept-journal-invite?token=TOKEN#KEY'
+dayone journal join --link-stdin < invitation-link.txt
+```
+
+Requires login, `dayone auth key-set`, and a prior `dayone sync` to obtain user
+keys. Use the complete HTTPS invitation URL, including the `#` encryption key.
+Quote the URL, or use `--link-stdin` to avoid placing it in shell history.
+Select the matching authenticated `--profile` for the invitation. The invitation
+host must match the API host, and a session must be saved for that exact API host;
+`--api-host` does not authorize reusing a different profile's credentials. The API
+host must use HTTPS; HTTP is allowed only for loopback development hosts.
+
+This command sends an online access request immediately; it does not queue an
+outbox item or create a local journal. The secret fragment is never sent to the
+server. Expired, incomplete, and unverifiable links fail before requesting access.
+
+Successful JSON includes `ok`, `journal_id`, `status`, and `message`:
+
+- `pending_approval`: request sent; wait for the journal owner's approval, then
+  run `dayone sync` to download the journal.
+- `already_member`: no request sent; run `dayone sync` to refresh local journals.
+
+A pending request or existing membership rejected by the server remains an error;
+HTTP success only means the request was accepted, not that access was granted.

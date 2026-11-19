@@ -18,6 +18,10 @@ impl DayOneClient {
         let base_url = normalize_base_url(&base_url.into())?;
         let client = reqwest::Client::builder()
             .user_agent(format!("dayone-cli/{}", env!("CARGO_PKG_VERSION")))
+            // Redirects must never forward the original request URL: paths can
+            // carry credentials (shared-journal invitation tokens), and reqwest
+            // strips Authorization and cookies across hosts but not Referer.
+            .referer(false)
             .build()
             .context("failed to initialize HTTP client")?;
         Ok(Self {
@@ -300,6 +304,9 @@ mod tests {
     use super::{DayOneClient, bearer_headers};
     use crate::http::DayOneApiClient;
     use reqwest::header::AUTHORIZATION;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn auth_header_uses_bearer_scheme() {
@@ -331,5 +338,126 @@ mod tests {
             .expect("client should construct")
             .with_bearer_token("   ");
         assert!(result.is_err(), "blank token should fail");
+    }
+
+    /// Accept one connection on `listener`, returning a stream with a read
+    /// timeout. Ports are ephemeral, so a missed request fails the test
+    /// instead of hanging forever.
+    fn accept_one(listener: &TcpListener) -> TcpStream {
+        listener.set_nonblocking(true).expect("set nonblocking");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false).expect("unset nonblocking");
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .expect("set read timeout");
+                    return stream;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "timed out waiting for a request");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(err) => panic!("{err}"),
+            }
+        }
+    }
+
+    /// Read one HTTP request (headers plus its Content-Length body).
+    fn read_request(stream: &mut TcpStream) -> String {
+        let mut bytes = Vec::new();
+        loop {
+            let mut chunk = [0; 2048];
+            let count = stream.read(&mut chunk).expect("read request bytes");
+            assert!(count > 0, "connection closed before request completed");
+            bytes.extend_from_slice(&chunk[..count]);
+            if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&bytes[..end]);
+                let length: usize = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|value| value.trim().parse().expect("parse content length"))
+                    })
+                    .unwrap_or(0);
+                if bytes.len() >= end + 4 + length {
+                    return String::from_utf8(bytes).expect("request is UTF-8");
+                }
+            }
+        }
+    }
+
+    fn respond(stream: &mut TcpStream, status: u16, headers: &str, body: &str) {
+        let response = format!(
+            "HTTP/1.1 {status} response\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("write response");
+    }
+
+    #[tokio::test]
+    async fn redirects_neither_forward_credentials_nor_the_original_url() {
+        let original = TcpListener::bind("127.0.0.1:0").expect("bind original host");
+        let target = TcpListener::bind("127.0.0.1:0").expect("bind redirect target");
+        let original_address = original.local_addr().expect("original address");
+        let target_address = target.local_addr().expect("target address");
+
+        let target_thread = std::thread::spawn(move || {
+            let mut stream = accept_one(&target);
+            let request = read_request(&mut stream);
+            respond(&mut stream, 200, "Content-Type: application/json\r\n", "{}");
+            request
+        });
+        let original_thread = std::thread::spawn(move || {
+            let mut stream = accept_one(&original);
+            let request = read_request(&mut stream);
+            respond(
+                &mut stream,
+                302,
+                &format!("Location: http://{target_address}/leak\r\n"),
+                "",
+            );
+            request
+        });
+
+        let client = DayOneClient::new(format!("http://{original_address}"))
+            .expect("client should construct")
+            .with_bearer_token("secret-bearer")
+            .expect("token should apply");
+        let value = client
+            .get_json("/shares/invite/invitation-token", &[])
+            .await
+            .expect("redirected request should succeed");
+        assert_eq!(value, serde_json::json!({}));
+
+        let first = original_thread.join().expect("original server thread");
+        assert!(
+            first
+                .to_ascii_lowercase()
+                .contains("authorization: bearer secret-bearer"),
+            "original request should carry the bearer token: {first}"
+        );
+        let second = target_thread.join().expect("target server thread");
+        let second = second.to_ascii_lowercase();
+        assert!(
+            second.starts_with("get /leak "),
+            "unexpected redirected request: {second}"
+        );
+        assert!(
+            !second.contains("authorization"),
+            "redirected request must not carry Authorization: {second}"
+        );
+        assert!(
+            !second.contains("referer"),
+            "redirected request must not carry a Referer header: {second}"
+        );
+        assert!(
+            !second.contains("invitation-token"),
+            "redirected request must not echo the original URL: {second}"
+        );
     }
 }

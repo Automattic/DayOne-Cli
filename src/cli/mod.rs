@@ -10,8 +10,8 @@ use std::time::Instant;
 use crate::commands::{
     auth_key_set, auth_login, auth_logout, auth_setup, comment, context_item_write, daily_chat_add,
     doctor, embeddings, entry_delete, entry_read, entry_tag, entry_write, journal_create,
-    journal_update, list, memory_process, outbox, profile, search, sync, sync_schedule,
-    user_settings_get,
+    journal_join, journal_update, list, memory_process, outbox, profile, search, sync,
+    sync_schedule, user_settings_get,
 };
 use crate::config::AppConfig;
 use crate::http::normalize_base_url;
@@ -183,6 +183,8 @@ enum MemorySubcommand {
 #[derive(Debug, Subcommand)]
 enum JournalSubcommand {
     Create(JournalCreateCliArgs),
+    /// Request to join a shared journal using its complete invitation link (online).
+    Join(JournalJoinCliArgs),
     /// Update an existing journal's metadata. Applies locally and queues a sync.
     Update(JournalUpdateCliArgs),
 }
@@ -191,6 +193,20 @@ enum JournalSubcommand {
 struct JournalCommand {
     #[command(subcommand)]
     command: JournalSubcommand,
+}
+
+#[derive(Debug, Args)]
+struct JournalJoinCliArgs {
+    /// Full invitation URL, including the # encryption key. Quote the entire URL.
+    #[arg(
+        value_name = "INVITATION_LINK",
+        required_unless_present = "link_stdin",
+        conflicts_with = "link_stdin"
+    )]
+    invitation_link: Option<String>,
+    /// Read the invitation link from stdin to keep it out of shell history.
+    #[arg(long)]
+    link_stdin: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1172,6 +1188,16 @@ async fn dispatch_journal(
     store: &Store,
 ) -> Result<()> {
     match journal_cmd.command {
+        JournalSubcommand::Join(args) => {
+            let link = if args.link_stdin {
+                std::io::read_to_string(std::io::stdin())
+                    .context("failed to read invitation link from stdin")?
+            } else {
+                args.invitation_link
+                    .expect("clap requires an invitation link")
+            };
+            print_json(&journal_join::execute(store, base_url, &link).await?)?;
+        }
         JournalSubcommand::Create(args) => {
             let output = journal_create::execute(
                 store,
@@ -1794,6 +1820,7 @@ fn subcommand_label(command: &TopLevelCommand) -> Option<&'static str> {
         }),
         TopLevelCommand::Journal(cmd) => Some(match cmd.command {
             JournalSubcommand::Create(_) => "create",
+            JournalSubcommand::Join(_) => "join",
             JournalSubcommand::Update(_) => "update",
         }),
         TopLevelCommand::Entry(cmd) => Some(match cmd.command {
@@ -1947,6 +1974,16 @@ mod tests {
 
         let parsed = Cli::try_parse_from(["dayone", "tui"]).expect("parse");
         assert_eq!(top_level_command_name(&parsed.command), "tui");
+    }
+
+    #[test]
+    fn journal_join_requires_exactly_one_link_source() {
+        let link = "https://dayone.me/accept-journal-invite?token=test#key";
+        let parsed = Cli::try_parse_from(["dayone", "journal", "join", link]).unwrap();
+        assert_eq!(subcommand_label(&parsed.command), Some("join"));
+        assert!(Cli::try_parse_from(["dayone", "journal", "join", "--link-stdin"]).is_ok());
+        assert!(Cli::try_parse_from(["dayone", "journal", "join"]).is_err());
+        assert!(Cli::try_parse_from(["dayone", "journal", "join", link, "--link-stdin"]).is_err());
     }
 
     #[test]

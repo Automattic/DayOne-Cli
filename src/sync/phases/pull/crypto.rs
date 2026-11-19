@@ -95,22 +95,12 @@ fn add_unlocked_user_verify_key(
     derived_master_key: &[u8; 32],
     verify_keys: &mut HashMap<String, RsaPublicKey>,
 ) -> Result<Option<RsaPrivateKey>> {
-    let Some(encrypted_private_key) = payload.encrypted_private_key() else {
+    let Some(private_key) =
+        crate::sync::crypto::unlock_user_identity_key(payload, derived_master_key)?
+    else {
         return Ok(None);
     };
-    let private_key = parse_private_key_pem(&String::from_utf8(decrypt_d1_mode0_with_key(
-        encrypted_private_key,
-        derived_master_key,
-    )?)?)?;
     let public_key = private_key.to_public_key();
-    if public_key.n().bits() != 2048 {
-        bail!("RSA user key must be 2048 bits");
-    }
-    if let Some(expected_public_key) = payload.user_public_key()
-        && parse_public_key_pem(expected_public_key)? != public_key
-    {
-        bail!("user public key does not match unlocked private key");
-    }
 
     let mut fingerprints = vec![
         bytes_to_hex_lower(&Sha256::digest(public_key.to_public_key_der()?.as_bytes())),
@@ -1053,50 +1043,66 @@ mod tests {
                 }]
             }}
         });
-        let user_payload = locked_user_key(&user_private, "user-fingerprint");
-        let dir = TempDir::new().expect("temp dir should create");
-        let store = Store::open_at(dir.path().join("store.db")).expect("store should open");
-        store
-            .upsert_singleton_json_row("user_identity_key", 1, &user_payload.to_string(), None)
-            .expect("user key should save");
-        store
-            .upsert_json_row("journals", "journal-1", None, None, &journal.to_string())
-            .expect("journal should save");
-        let decryptor = build_journal_decryptor(
-            &store,
-            crate::sync::crypto::test_support::TEST_MASTER_KEY,
-            Some("user-1"),
-        )
-        .expect("journal decryptor should build")
-        .expect("journal decryptor should exist");
+        for use_der in [false, true] {
+            let mut user_payload = locked_user_key(&user_private, "user-fingerprint");
+            if use_der {
+                let derived = crate::sync::crypto::derive_d1_symmetric_key_from_master_key(
+                    crate::sync::crypto::test_support::TEST_MASTER_KEY,
+                )
+                .unwrap();
+                let private_der = user_private.to_pkcs8_der().unwrap();
+                user_payload["encryptedPrivateKey"] = Value::String(
+                    crate::sync::crypto::encrypt_d1_mode0_with_key(
+                        private_der.as_bytes(),
+                        &derived,
+                    )
+                    .unwrap(),
+                );
+            }
+            let dir = TempDir::new().expect("temp dir should create");
+            let store = Store::open_at(dir.path().join("store.db")).expect("store should open");
+            store
+                .upsert_singleton_json_row("user_identity_key", 1, &user_payload.to_string(), None)
+                .expect("user key should save");
+            store
+                .upsert_json_row("journals", "journal-1", None, None, &journal.to_string())
+                .expect("journal should save");
+            let decryptor = build_journal_decryptor(
+                &store,
+                crate::sync::crypto::test_support::TEST_MASTER_KEY,
+                Some("user-1"),
+            )
+            .expect("journal decryptor should build")
+            .expect("journal decryptor should exist");
 
-        let accepted =
-            build_entries_decryptor(&store, &decryptor).expect("entries decryptor should build");
-        assert!(
-            accepted
-                .journal_keys_by_fingerprint
-                .contains_key(&fingerprint)
-        );
-        let entry_blob = encrypt_media_blob(
-            &journal_private.to_public_key(),
-            &fingerprint,
-            b"verified entry content",
-        );
-        assert_eq!(
-            decrypt_entry_d1_payload(&entry_blob, &accepted)
-                .expect("imported key should decrypt entry content"),
-            b"verified entry content"
-        );
+            let accepted = build_entries_decryptor(&store, &decryptor)
+                .expect("entries decryptor should build");
+            assert!(
+                accepted
+                    .journal_keys_by_fingerprint
+                    .contains_key(&fingerprint)
+            );
+            let entry_blob = encrypt_media_blob(
+                &journal_private.to_public_key(),
+                &fingerprint,
+                b"verified entry content",
+            );
+            assert_eq!(
+                decrypt_entry_d1_payload(&entry_blob, &accepted)
+                    .expect("imported key should decrypt entry content"),
+                b"verified entry content"
+            );
 
-        let mut forged = journal;
-        forged["encryption"]["vault"]["keys"][0]["updated"]["signature"] =
-            Value::String("AAAA".to_owned());
-        store
-            .upsert_json_row("journals", "journal-1", None, None, &forged.to_string())
-            .expect("forged journal should save");
-        let rejected =
-            build_entries_decryptor(&store, &decryptor).expect("entries decryptor should build");
-        assert!(rejected.journal_keys_by_fingerprint.is_empty());
+            let mut forged = journal.clone();
+            forged["encryption"]["vault"]["keys"][0]["updated"]["signature"] =
+                Value::String("AAAA".to_owned());
+            store
+                .upsert_json_row("journals", "journal-1", None, None, &forged.to_string())
+                .expect("forged journal should save");
+            let rejected = build_entries_decryptor(&store, &decryptor)
+                .expect("entries decryptor should build");
+            assert!(rejected.journal_keys_by_fingerprint.is_empty());
+        }
     }
 
     #[test]
