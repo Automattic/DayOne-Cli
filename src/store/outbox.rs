@@ -1,3 +1,4 @@
+use crate::util::bytes_to_hex_lower;
 use rusqlite::{TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
@@ -164,8 +165,8 @@ impl Store {
             ],
         )?;
         let marker = format!(
-            r#"{{"data_hash":"{:x}"}}"#,
-            Sha256::digest(data_json.as_bytes())
+            r#"{{"data_hash":"{}"}}"#,
+            bytes_to_hex_lower(&Sha256::digest(data_json.as_bytes()))
         );
         let queued = enqueue_outbox_item_if_not_pending_in_transaction(
             &transaction,

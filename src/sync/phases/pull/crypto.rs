@@ -1,4 +1,5 @@
 use super::*;
+use crate::util::bytes_to_hex_lower;
 
 pub(crate) fn normalize_known_encrypted_journal_name(journal: &mut Value) {
     let Some(obj) = journal.as_object_mut() else {
@@ -81,7 +82,7 @@ pub(crate) fn build_journal_decryptor(
 fn add_alternative_user_verify_keys(
     payload: &UserKeysPayload,
     derived_master_key: &[u8; 32],
-    verify_keys: &mut HashMap<String, RsaPublicKey>,
+    verify_keys: &mut HashMap<String, PublicKey>,
 ) {
     for key in payload.alternative_user_keys() {
         if let Err(err) = add_unlocked_user_verify_key(key, derived_master_key, verify_keys) {
@@ -93,8 +94,8 @@ fn add_alternative_user_verify_keys(
 fn add_unlocked_user_verify_key(
     payload: &UserKeysPayload,
     derived_master_key: &[u8; 32],
-    verify_keys: &mut HashMap<String, RsaPublicKey>,
-) -> Result<Option<RsaPrivateKey>> {
+    verify_keys: &mut HashMap<String, PublicKey>,
+) -> Result<Option<PrivateKey>> {
     let Some(encrypted_private_key) = payload.encrypted_private_key() else {
         return Ok(None);
     };
@@ -103,7 +104,7 @@ fn add_unlocked_user_verify_key(
         derived_master_key,
     )?)?)?;
     let public_key = private_key.to_public_key();
-    if public_key.n().bits() != 2048 {
+    if public_key.n().bit_width() != 2048 {
         bail!("RSA user key must be 2048 bits");
     }
     if let Some(expected_public_key) = payload.user_public_key()
@@ -294,7 +295,7 @@ pub(crate) fn build_entries_decryptor(
     decryptor: &JournalDecryptor,
 ) -> Result<EntriesDecryptor> {
     let journals = store.list_json_rows("journals")?;
-    let mut journal_keys_by_fingerprint: HashMap<String, RsaPrivateKey> = HashMap::new();
+    let mut journal_keys_by_fingerprint: HashMap<String, PrivateKey> = HashMap::new();
     for journal_row in journals {
         let journal: Journal = match serde_json::from_str(&journal_row) {
             Ok(v) => v,
@@ -573,12 +574,12 @@ fn signature_valid_via_shared_journal(
 }
 
 fn verify_transfer(
-    trusted_signer: &RsaPublicKey,
+    trusted_signer: &PublicKey,
     transfer: &Value,
     signer_field: &str,
     next_key_field: &str,
     signature_field: &str,
-) -> Option<RsaPublicKey> {
+) -> Option<PublicKey> {
     let signer = parse_public_key_pem(transfer.get(signer_field)?.as_str()?).ok()?;
     if &signer != trusted_signer {
         return None;
@@ -590,7 +591,7 @@ fn verify_transfer(
         .flatten()
 }
 
-fn verify_rsa_signature(public_key: &RsaPublicKey, signature: &str, data: &[u8]) -> bool {
+fn verify_rsa_signature(public_key: &PublicKey, signature: &str, data: &[u8]) -> bool {
     let Ok(signature) = BASE64_STANDARD.decode(signature) else {
         return false;
     };
@@ -603,16 +604,16 @@ fn verify_rsa_signature(public_key: &RsaPublicKey, signature: &str, data: &[u8])
         .is_ok()
 }
 
-fn parse_public_key_pem(pem: &str) -> Result<RsaPublicKey> {
+fn parse_public_key_pem(pem: &str) -> Result<PublicKey> {
     if pem.len() > 1024 {
         bail!("RSA public key is too large");
     }
-    let key = if let Ok(key) = RsaPublicKey::from_public_key_pem(pem) {
+    let key = if let Ok(key) = PublicKey::from_public_key_pem(pem) {
         key
     } else {
-        RsaPublicKey::from_pkcs1_pem(pem)?
+        PublicKey::from_pkcs1_pem(pem)?
     };
-    if key.n().bits() != 2048 {
+    if key.n().bit_width() != 2048 {
         bail!("RSA public key must be 2048 bits");
     }
     Ok(key)
@@ -620,7 +621,7 @@ fn parse_public_key_pem(pem: &str) -> Result<RsaPublicKey> {
 
 pub(crate) fn decrypt_journal_vault_key(
     vault: &serde_json::Map<String, Value>,
-    user_private_key: &RsaPrivateKey,
+    user_private_key: &PrivateKey,
 ) -> Option<Vec<u8>> {
     let grants = vault.get("grants")?.as_array()?;
     for grant in grants {
@@ -683,7 +684,7 @@ pub(crate) fn decrypt_entry_d1_payload(
         .ok_or_else(|| {
             anyhow!("journal private key not found for fingerprint {fingerprint_hex}")
         })?;
-    let content_key = private_key.decrypt(Oaep::new::<Sha1>(), locked_key)?;
+    let content_key = private_key.decrypt(Oaep::<Sha1>::new(), locked_key)?;
     if content_key.len() != 32 {
         bail!("unexpected content key size {}", content_key.len());
     }
@@ -732,20 +733,12 @@ pub(crate) fn decrypt_original_media(
         .context("failed to decrypt original media D1 payload")
 }
 
-pub(crate) fn bytes_to_hex_lower(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{:02x}", b));
-    }
-    out
-}
-
 pub(crate) fn decrypt_grant_vault_key(
     encrypted_vault_key_b64: &str,
-    user_private_key: &RsaPrivateKey,
+    user_private_key: &PrivateKey,
 ) -> Result<Vec<u8>> {
     let encrypted_vault_key = BASE64_STANDARD.decode(encrypted_vault_key_b64)?;
-    let vault_key = user_private_key.decrypt(Oaep::new::<Sha1>(), &encrypted_vault_key)?;
+    let vault_key = user_private_key.decrypt(Oaep::<Sha1>::new(), &encrypted_vault_key)?;
     Ok(vault_key)
 }
 
@@ -785,11 +778,11 @@ pub(crate) fn decrypt_d1_mode0_with_key(input_b64: &str, key_bytes: &[u8]) -> Re
     Ok(decrypted)
 }
 
-pub(crate) fn parse_private_key_pem(pem: &str) -> Result<RsaPrivateKey> {
-    if let Ok(pkcs8_key) = RsaPrivateKey::from_pkcs8_pem(pem) {
+pub(crate) fn parse_private_key_pem(pem: &str) -> Result<PrivateKey> {
+    if let Ok(pkcs8_key) = PrivateKey::from_pkcs8_pem(pem) {
         return Ok(pkcs8_key);
     }
-    Ok(RsaPrivateKey::from_pkcs1_pem(pem)?)
+    Ok(PrivateKey::from_pkcs1_pem(pem)?)
 }
 
 #[cfg(test)]
@@ -797,9 +790,10 @@ mod tests {
     use super::*;
     use aes_gcm::aead::{Aead, KeyInit};
     use aes_gcm::{Aes256Gcm, Key};
+    use getrandom::SysRng;
     use md5::{Digest, Md5};
-    use rsa::rand_core::{OsRng, RngCore};
-    use rsa::{Oaep, RsaPrivateKey, RsaPublicKey};
+    use rsa::rand_core::{Rng, UnwrapErr};
+    use rsa::{Oaep, PrivateKey, PublicKey};
     use sha1::Sha1;
     use std::collections::HashMap;
     use tempfile::TempDir;
@@ -811,7 +805,7 @@ mod tests {
             .collect()
     }
 
-    fn test_decryptor(user_id: &str, private_key: RsaPrivateKey) -> JournalDecryptor {
+    fn test_decryptor(user_id: &str, private_key: PrivateKey) -> JournalDecryptor {
         let public_key = private_key.to_public_key();
         JournalDecryptor {
             user_id: Some(user_id.to_owned()),
@@ -830,15 +824,15 @@ mod tests {
 
     #[test]
     fn journal_metadata_classification_covers_wire_states() {
-        let mut rng = OsRng;
+        let mut rng = UnwrapErr(SysRng);
         let user_private =
-            RsaPrivateKey::new(&mut rng, 2048).expect("user private key should generate");
+            PrivateKey::new(&mut rng, 2048).expect("user private key should generate");
         let user_public = user_private.to_public_key();
         let decryptor = test_decryptor("user-1", user_private);
         let vault_key = [7_u8; 32];
         let grant = BASE64_STANDARD.encode(
             user_public
-                .encrypt(&mut rng, Oaep::new::<Sha1>(), &vault_key)
+                .encrypt(&mut rng, Oaep::<Sha1>::new(), &vault_key)
                 .expect("vault key should wrap"),
         );
         let encrypted_name = crate::sync::crypto::encrypt_d1_mode0_with_key(b"Private", &vault_key)
@@ -919,15 +913,15 @@ mod tests {
 
     #[test]
     fn journal_metadata_rejects_valid_ciphertext_with_invalid_utf8() {
-        let mut rng = OsRng;
+        let mut rng = UnwrapErr(SysRng);
         let user_private =
-            RsaPrivateKey::new(&mut rng, 2048).expect("user private key should generate");
+            PrivateKey::new(&mut rng, 2048).expect("user private key should generate");
         let user_public = user_private.to_public_key();
         let decryptor = test_decryptor("user-1", user_private);
         let vault_key = [7_u8; 32];
         let grant = BASE64_STANDARD.encode(
             user_public
-                .encrypt(&mut rng, Oaep::new::<Sha1>(), &vault_key)
+                .encrypt(&mut rng, Oaep::<Sha1>::new(), &vault_key)
                 .expect("vault key should wrap"),
         );
         let encrypted = crate::sync::crypto::encrypt_d1_mode0_with_key(&[0xff], &vault_key)
@@ -943,14 +937,14 @@ mod tests {
         );
     }
 
-    fn public_key_pem(private_key: &RsaPrivateKey) -> String {
+    fn public_key_pem(private_key: &PrivateKey) -> String {
         private_key
             .to_public_key()
             .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
             .expect("public key should encode")
     }
 
-    fn locked_user_key(private_key: &RsaPrivateKey, fingerprint: &str) -> Value {
+    fn locked_user_key(private_key: &PrivateKey, fingerprint: &str) -> Value {
         let derived = crate::sync::crypto::derive_d1_symmetric_key_from_master_key(
             crate::sync::crypto::test_support::TEST_MASTER_KEY,
         )
@@ -968,7 +962,7 @@ mod tests {
         })
     }
 
-    fn sign(private_key: &RsaPrivateKey, data: &[u8]) -> String {
+    fn sign(private_key: &PrivateKey, data: &[u8]) -> String {
         BASE64_STANDARD.encode(
             private_key
                 .sign(
@@ -979,10 +973,9 @@ mod tests {
         )
     }
 
-    fn signed_journal_key(signer: &RsaPrivateKey) -> Value {
-        let mut rng = OsRng;
-        let journal_private =
-            RsaPrivateKey::new(&mut rng, 2048).expect("journal key should generate");
+    fn signed_journal_key(signer: &PrivateKey) -> Value {
+        let mut rng = UnwrapErr(SysRng);
+        let journal_private = PrivateKey::new(&mut rng, 2048).expect("journal key should generate");
         let public_key = public_key_pem(&journal_private);
         let fingerprint = bytes_to_hex_lower(&Sha256::digest(
             journal_private
@@ -1007,10 +1000,9 @@ mod tests {
 
     #[test]
     fn store_backed_import_accepts_signed_key_and_rejects_forged_key() {
-        let mut rng = OsRng;
-        let user_private = RsaPrivateKey::new(&mut rng, 2048).expect("user key should generate");
-        let journal_private =
-            RsaPrivateKey::new(&mut rng, 2048).expect("journal key should generate");
+        let mut rng = UnwrapErr(SysRng);
+        let user_private = PrivateKey::new(&mut rng, 2048).expect("user key should generate");
+        let journal_private = PrivateKey::new(&mut rng, 2048).expect("journal key should generate");
         let vault_key = [7_u8; 32];
         let public_key = public_key_pem(&journal_private);
         let fingerprint = bytes_to_hex_lower(&Sha256::digest(
@@ -1035,7 +1027,7 @@ mod tests {
         signed_data.extend_from_slice(&raw_locked_key);
         let encrypted_vault_key = user_private
             .to_public_key()
-            .encrypt(&mut rng, Oaep::new::<Sha1>(), &vault_key)
+            .encrypt(&mut rng, Oaep::<Sha1>::new(), &vault_key)
             .expect("vault key should wrap");
         let journal = serde_json::json!({
             "id": "journal-1",
@@ -1101,8 +1093,8 @@ mod tests {
 
     #[test]
     fn accepts_user_signed_journal_key_via_grant_or_update_fingerprint() {
-        let mut rng = OsRng;
-        let user_private = RsaPrivateKey::new(&mut rng, 2048).expect("user key should generate");
+        let mut rng = UnwrapErr(SysRng);
+        let user_private = PrivateKey::new(&mut rng, 2048).expect("user key should generate");
         let decryptor = test_decryptor("user-1", user_private.clone());
         let mut key = signed_journal_key(&user_private);
         let journal: Journal = serde_json::from_value(serde_json::json!({"id": "journal-1"}))
@@ -1136,9 +1128,9 @@ mod tests {
 
     #[test]
     fn accepts_journal_key_signed_by_store_backed_rotated_user_key() {
-        let mut rng = OsRng;
-        let current = RsaPrivateKey::new(&mut rng, 2048).expect("current key should generate");
-        let rotated = RsaPrivateKey::new(&mut rng, 2048).expect("rotated key should generate");
+        let mut rng = UnwrapErr(SysRng);
+        let current = PrivateKey::new(&mut rng, 2048).expect("current key should generate");
+        let rotated = PrivateKey::new(&mut rng, 2048).expect("rotated key should generate");
         let current_payload = locked_user_key(&current, "current-fingerprint");
         let rotated_payload = locked_user_key(&rotated, "rotated-fingerprint");
         let dir = TempDir::new().expect("temp dir should create");
@@ -1182,8 +1174,8 @@ mod tests {
 
     #[test]
     fn rejects_unsigned_legacy_journal_key_without_compatibility_fallback() {
-        let mut rng = OsRng;
-        let user_private = RsaPrivateKey::new(&mut rng, 2048).expect("user key should generate");
+        let mut rng = UnwrapErr(SysRng);
+        let user_private = PrivateKey::new(&mut rng, 2048).expect("user key should generate");
         let decryptor = test_decryptor("user-1", user_private.clone());
         let mut key = signed_journal_key(&user_private);
         key["updated"]
@@ -1210,10 +1202,10 @@ mod tests {
 
     #[test]
     fn rejects_missing_and_forged_journal_key_signatures() {
-        let mut rng = OsRng;
-        let user_private = RsaPrivateKey::new(&mut rng, 2048).expect("user key should generate");
+        let mut rng = UnwrapErr(SysRng);
+        let user_private = PrivateKey::new(&mut rng, 2048).expect("user key should generate");
         let attacker_private =
-            RsaPrivateKey::new(&mut rng, 2048).expect("attacker key should generate");
+            PrivateKey::new(&mut rng, 2048).expect("attacker key should generate");
         let decryptor = test_decryptor("user-1", user_private);
         let journal: Journal = serde_json::from_value(serde_json::json!({"id": "journal-1"}))
             .expect("journal should parse");
@@ -1242,14 +1234,12 @@ mod tests {
 
     #[test]
     fn accepts_shared_journal_key_through_contiguous_ownership_transfer() {
-        let mut rng = OsRng;
-        let participant =
-            RsaPrivateKey::new(&mut rng, 2048).expect("participant key should generate");
-        let inviting_owner = RsaPrivateKey::new(&mut rng, 2048).expect("owner key should generate");
+        let mut rng = UnwrapErr(SysRng);
+        let participant = PrivateKey::new(&mut rng, 2048).expect("participant key should generate");
+        let inviting_owner = PrivateKey::new(&mut rng, 2048).expect("owner key should generate");
         let intermediate_owner =
-            RsaPrivateKey::new(&mut rng, 2048).expect("intermediate key should generate");
-        let current_owner =
-            RsaPrivateKey::new(&mut rng, 2048).expect("new owner key should generate");
+            PrivateKey::new(&mut rng, 2048).expect("intermediate key should generate");
+        let current_owner = PrivateKey::new(&mut rng, 2048).expect("new owner key should generate");
         let participant_pem = public_key_pem(&participant);
         let inviting_owner_pem = public_key_pem(&inviting_owner);
         let intermediate_owner_pem = public_key_pem(&intermediate_owner);
@@ -1297,13 +1287,12 @@ mod tests {
 
     #[test]
     fn rejects_disconnected_shared_journal_trust_link() {
-        let mut rng = OsRng;
-        let participant =
-            RsaPrivateKey::new(&mut rng, 2048).expect("participant key should generate");
-        let inviting_owner = RsaPrivateKey::new(&mut rng, 2048).expect("owner key should generate");
-        let attacker = RsaPrivateKey::new(&mut rng, 2048).expect("attacker key should generate");
+        let mut rng = UnwrapErr(SysRng);
+        let participant = PrivateKey::new(&mut rng, 2048).expect("participant key should generate");
+        let inviting_owner = PrivateKey::new(&mut rng, 2048).expect("owner key should generate");
+        let attacker = PrivateKey::new(&mut rng, 2048).expect("attacker key should generate");
         let forged_owner =
-            RsaPrivateKey::new(&mut rng, 2048).expect("forged owner key should generate");
+            PrivateKey::new(&mut rng, 2048).expect("forged owner key should generate");
         let participant_pem = public_key_pem(&participant);
         let inviting_owner_pem = public_key_pem(&inviting_owner);
         let attacker_pem = public_key_pem(&attacker);
@@ -1347,12 +1336,8 @@ mod tests {
     /// Builds a D1 format-1 (locked-key) media blob exactly like the push-side
     /// `encrypt_original_media_for_journal` does, so we can prove the pull path
     /// decrypts it.
-    fn encrypt_media_blob(
-        public: &RsaPublicKey,
-        fingerprint_hex: &str,
-        plaintext: &[u8],
-    ) -> Vec<u8> {
-        let mut rng = OsRng;
+    fn encrypt_media_blob(public: &PublicKey, fingerprint_hex: &str, plaintext: &[u8]) -> Vec<u8> {
+        let mut rng = UnwrapErr(SysRng);
         let mut content_key = [0_u8; 32];
         rng.fill_bytes(&mut content_key);
         let mut iv = [0_u8; 12];
@@ -1364,7 +1349,7 @@ mod tests {
             .encrypt((&iv).into(), plaintext)
             .expect("media should encrypt");
         let wrapped_key = public
-            .encrypt(&mut rng, Oaep::new::<Sha1>(), &content_key)
+            .encrypt(&mut rng, Oaep::<Sha1>::new(), &content_key)
             .expect("content key should wrap");
 
         let mut out = Vec::new();
@@ -1391,8 +1376,8 @@ mod tests {
 
     #[test]
     fn encrypted_entry_rejects_decompression_over_128_mib() {
-        let mut rng = OsRng;
-        let journal_private = RsaPrivateKey::new(&mut rng, 2048).expect("journal key generates");
+        let mut rng = UnwrapErr(SysRng);
+        let journal_private = PrivateKey::new(&mut rng, 2048).expect("journal key generates");
         let fingerprint = Sha256::digest(
             journal_private
                 .to_public_key()
@@ -1409,7 +1394,7 @@ mod tests {
             .expect("payload should encrypt");
         let locked_key = journal_private
             .to_public_key()
-            .encrypt(&mut rng, Oaep::new::<Sha1>(), &content_key)
+            .encrypt(&mut rng, Oaep::<Sha1>::new(), &content_key)
             .expect("content key should lock");
         let mut payload = b"D1\x01\x02".to_vec();
         payload.extend_from_slice(&fingerprint);
@@ -1445,9 +1430,8 @@ mod tests {
 
     #[test]
     fn malformed_grant_for_encrypted_metadata_is_a_failed_decryption() {
-        let mut rng = OsRng;
-        let user_private_key =
-            RsaPrivateKey::new(&mut rng, 2048).expect("user private key generates");
+        let mut rng = UnwrapErr(SysRng);
+        let user_private_key = PrivateKey::new(&mut rng, 2048).expect("user private key generates");
         let decryptor = JournalDecryptor {
             user_id: Some("user-1".to_owned()),
             user_private_key,
@@ -1466,8 +1450,8 @@ mod tests {
 
     #[test]
     fn pull_decryptor_round_trips_encrypted_media() {
-        let mut rng = OsRng;
-        let journal_private = RsaPrivateKey::new(&mut rng, 2048).expect("journal key generates");
+        let mut rng = UnwrapErr(SysRng);
+        let journal_private = PrivateKey::new(&mut rng, 2048).expect("journal key generates");
         let public = journal_private.to_public_key();
         let fingerprint_hex =
             "0011223344556677889900aabbccddeeff00112233445566778899aabbccddee".to_owned();

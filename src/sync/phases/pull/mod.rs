@@ -13,7 +13,7 @@ use md5::Md5;
 use rsa::pkcs1::{DecodeRsaPrivateKey, DecodeRsaPublicKey, EncodeRsaPrivateKey};
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
 use rsa::traits::PublicKeyParts;
-use rsa::{Oaep, RsaPrivateKey, RsaPublicKey};
+use rsa::{Oaep, PrivateKey, PublicKey};
 use serde_json::Value;
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
@@ -34,13 +34,13 @@ use crate::sync::engine::{MAX_PAGE_LOOPS, ResourceSyncOutput, log_sync, now_epoc
 #[derive(Debug, Clone)]
 pub(crate) struct JournalDecryptor {
     user_id: Option<String>,
-    user_private_key: RsaPrivateKey,
-    user_verify_keys: HashMap<String, RsaPublicKey>,
+    user_private_key: PrivateKey,
+    user_verify_keys: HashMap<String, PublicKey>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct EntriesDecryptor {
-    journal_keys_by_fingerprint: HashMap<String, RsaPrivateKey>,
+    journal_keys_by_fingerprint: HashMap<String, PrivateKey>,
 }
 
 #[derive(Debug, Clone, Copy)]

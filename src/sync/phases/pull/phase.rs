@@ -729,7 +729,8 @@ pub(crate) async fn run_pull_phase<C: DayOneApiClient>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsa::rand_core::OsRng;
+    use getrandom::SysRng;
+    use rsa::rand_core::UnwrapErr;
     use rusqlite::OptionalExtension;
     use serde_json::json;
     use tempfile::Builder;
@@ -888,13 +889,13 @@ mod tests {
     fn journal_pull_replaces_and_clears_privacy_safe_metadata_diagnostics() {
         let path = test_store_path("metadata-diagnostics");
         let store = Store::open_at(&*path).expect("store should open");
-        let mut rng = OsRng;
+        let mut rng = UnwrapErr(SysRng);
         let user_private =
-            RsaPrivateKey::new(&mut rng, 2048).expect("user private key should generate");
+            PrivateKey::new(&mut rng, 2048).expect("user private key should generate");
         let vault_key = [7_u8; 32];
         let encrypted_vault_key = user_private
             .to_public_key()
-            .encrypt(&mut rng, Oaep::new::<Sha1>(), &vault_key)
+            .encrypt(&mut rng, Oaep::<Sha1>::new(), &vault_key)
             .expect("vault key should wrap");
         let decryptor = JournalDecryptor {
             user_id: Some("user-1".to_owned()),

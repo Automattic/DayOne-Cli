@@ -1,3 +1,4 @@
+use crate::util::bytes_to_hex_lower;
 #[cfg(test)]
 use std::cell::RefCell;
 #[cfg(all(not(test), feature = "embeddings"))]
@@ -68,7 +69,7 @@ fn sha256_hex(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
     let digest = hasher.finalize();
-    format!("{:x}", digest)
+    bytes_to_hex_lower(&digest)
 }
 
 #[cfg(all(not(test), feature = "embeddings"))]
@@ -143,7 +144,7 @@ fn embedding_model() -> Result<&'static Mutex<TextEmbedding>> {
             TextInitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(false);
         TextEmbedding::try_new(options)
             .map(Mutex::new)
-            .map_err(|err| format!("{err:#}"))
+            .map_err(|err| format!("{:#}", anyhow::Error::new(err)))
     });
     match init {
         Ok(model) => Ok(model),

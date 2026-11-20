@@ -38,10 +38,10 @@ const ERR_SEC_AUTH_FAILED: i32 = -25293;
 #[cfg(target_os = "macos")]
 const ERR_SEC_INTERACTION_NOT_ALLOWED: i32 = -25308;
 
-fn map_keyring_error(err: keyring::Error, interaction_disabled: bool) -> StoreError {
+fn map_keyring_error(err: keyring_core::Error, interaction_disabled: bool) -> StoreError {
     #[cfg(target_os = "macos")]
     if interaction_disabled
-        && let keyring::Error::PlatformFailure(inner) = &err
+        && let keyring_core::Error::PlatformFailure(inner) = &err
         && inner
             .downcast_ref::<security_framework::base::Error>()
             .is_some_and(|err| {
@@ -55,10 +55,10 @@ fn map_keyring_error(err: keyring::Error, interaction_disabled: bool) -> StoreEr
     }
 
     match err {
-        keyring::Error::NoStorageAccess(inner) => {
+        keyring_core::Error::NoStorageAccess(inner) => {
             StoreError::KeychainUnavailable(inner.to_string())
         }
-        keyring::Error::NoEntry => {
+        keyring_core::Error::NoEntry => {
             StoreError::Keychain("No matching entry found in secure storage".to_owned())
         }
         other => StoreError::Keychain(other.to_string()),
@@ -137,11 +137,29 @@ impl KeychainOperationGuard {
     }
 }
 
+fn secure_master_key_entry(account: &str) -> keyring_core::Result<keyring_core::Entry> {
+    use keyring_core::api::CredentialStoreApi;
+
+    #[cfg(target_os = "macos")]
+    let store = apple_native_keyring_store::keychain::Store::new()?;
+
+    #[cfg(target_os = "windows")]
+    let store = windows_native_keyring_store::Store::new()?;
+
+    #[cfg(target_os = "linux")]
+    let store = linux_keyutils_keyring_store::Store::new_with_configuration(
+        // Match keyring 3's credential names so existing keys remain accessible.
+        &std::collections::HashMap::from([("prefix", "keyring-rs:")]),
+    )?;
+
+    store.build(MASTER_KEY_SERVICE, account, None)
+}
+
 impl SecureMasterKeyStore for SystemSecureMasterKeyStore {
     fn set_master_key(&self, account: &str, master_key: &str) -> StoreResult<()> {
         let guard = KeychainOperationGuard::acquire()?;
         let interaction_disabled = guard.interaction_disabled();
-        let entry = keyring::Entry::new(MASTER_KEY_SERVICE, account)
+        let entry = secure_master_key_entry(account)
             .map_err(|err| map_keyring_error(err, interaction_disabled))?;
         entry
             .set_password(master_key)
@@ -151,11 +169,11 @@ impl SecureMasterKeyStore for SystemSecureMasterKeyStore {
     fn get_master_key(&self, account: &str) -> StoreResult<Option<String>> {
         let guard = KeychainOperationGuard::acquire()?;
         let interaction_disabled = guard.interaction_disabled();
-        let entry = keyring::Entry::new(MASTER_KEY_SERVICE, account)
+        let entry = secure_master_key_entry(account)
             .map_err(|err| map_keyring_error(err, interaction_disabled))?;
         match entry.get_password() {
             Ok(value) => Ok(Some(value)),
-            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(keyring_core::Error::NoEntry) => Ok(None),
             Err(err) => Err(map_keyring_error(err, interaction_disabled)),
         }
     }
@@ -163,10 +181,10 @@ impl SecureMasterKeyStore for SystemSecureMasterKeyStore {
     fn delete_master_key(&self, account: &str) -> StoreResult<()> {
         let guard = KeychainOperationGuard::acquire()?;
         let interaction_disabled = guard.interaction_disabled();
-        let entry = keyring::Entry::new(MASTER_KEY_SERVICE, account)
+        let entry = secure_master_key_entry(account)
             .map_err(|err| map_keyring_error(err, interaction_disabled))?;
         match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
             Err(err) => Err(map_keyring_error(err, interaction_disabled)),
         }
     }
@@ -1271,9 +1289,9 @@ mod tests {
     fn interaction_errors_are_actionable_only_when_ui_is_disabled() {
         for code in [ERR_SEC_AUTH_FAILED, ERR_SEC_INTERACTION_NOT_ALLOWED] {
             let err = map_keyring_error(
-                keyring::Error::PlatformFailure(Box::new(
+                apple_native_keyring_store::keychain::decode_error(
                     security_framework::base::Error::from_code(code),
-                )),
+                ),
                 true,
             );
             assert!(matches!(err, StoreError::KeychainInteractionRequired));
@@ -1283,17 +1301,17 @@ mod tests {
         }
 
         let interactive_auth_failure = map_keyring_error(
-            keyring::Error::PlatformFailure(Box::new(security_framework::base::Error::from_code(
-                ERR_SEC_AUTH_FAILED,
-            ))),
+            apple_native_keyring_store::keychain::decode_error(
+                security_framework::base::Error::from_code(ERR_SEC_AUTH_FAILED),
+            ),
             false,
         );
         assert!(matches!(interactive_auth_failure, StoreError::Keychain(_)));
 
         let unrelated = map_keyring_error(
-            keyring::Error::PlatformFailure(Box::new(security_framework::base::Error::from_code(
-                -25309,
-            ))),
+            apple_native_keyring_store::keychain::decode_error(
+                security_framework::base::Error::from_code(-25309),
+            ),
             true,
         );
         assert!(matches!(unrelated, StoreError::Keychain(_)));

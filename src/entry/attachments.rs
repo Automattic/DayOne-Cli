@@ -1,3 +1,4 @@
+use crate::util::bytes_to_hex_lower;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Cursor, Read};
@@ -6,11 +7,12 @@ use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use getrandom::SysRng;
 use image::codecs::jpeg::{JpegDecoder, JpegEncoder};
 use image::{DynamicImage, GenericImageView, ImageDecoder, Rgb, RgbImage};
 use lopdf::{Dictionary as PdfDictionary, Document as PdfDocument, Object as PdfObject};
 use md5::{Digest as Md5Digest, Md5};
-use rsa::rand_core::{OsRng, RngCore};
+use rsa::rand_core::{Rng, UnwrapErr};
 use sha2::Sha256;
 
 use crate::util::normalize_entry_id;
@@ -210,11 +212,11 @@ pub fn normalize_or_generate_entry_id(entry_id: Option<&str>) -> Result<String> 
     hasher.update(now_epoch_ms().to_le_bytes());
     hasher.update(std::process::id().to_le_bytes());
     let mut nonce = [0_u8; 16];
-    let mut rng = OsRng;
+    let mut rng = UnwrapErr(SysRng);
     rng.fill_bytes(&mut nonce);
     hasher.update(nonce);
     let digest = hasher.finalize();
-    let hex = format!("{:x}", digest);
+    let hex = bytes_to_hex_lower(&digest);
     Ok(hex[0..32].to_ascii_uppercase())
 }
 
@@ -306,7 +308,7 @@ fn derive_video_metadata(path: &Path, _content_type: &str) -> Result<AttachmentD
             "ffmpeg returned oversized frame {thumbnail_width}x{thumbnail_height} despite scale={scaled_max}"
         );
     }
-    let thumbnail_md5 = format!("{:x}", Md5::digest(&thumbnail_bytes));
+    let thumbnail_md5 = bytes_to_hex_lower(&Md5::digest(&thumbnail_bytes));
     let thumbnail_size =
         i64::try_from(thumbnail_bytes.len()).context("thumbnail file size overflowed i64 range")?;
 
@@ -341,7 +343,7 @@ fn extract_video_thumbnail_bytes(
     max_bytes: u64,
 ) -> Result<Vec<u8>> {
     let mut nonce = [0_u8; 8];
-    let mut rng = OsRng;
+    let mut rng = UnwrapErr(SysRng);
     rng.fill_bytes(&mut nonce);
     let nonce_hex = nonce
         .iter()
@@ -474,7 +476,7 @@ fn derive_pdf_metadata(path: &Path, _content_type: &str) -> Result<AttachmentDer
         thumbnail_source_image.thumbnail(THUMBNAIL_MAX_DIMENSION, THUMBNAIL_MAX_DIMENSION);
     let thumbnail_bytes = encode_thumbnail_jpeg(&thumbnail_image)
         .with_context(|| format!("failed to encode PDF thumbnail for '{}'", path.display()))?;
-    let thumbnail_md5 = format!("{:x}", Md5::digest(&thumbnail_bytes));
+    let thumbnail_md5 = bytes_to_hex_lower(&Md5::digest(&thumbnail_bytes));
     let thumbnail_size =
         i64::try_from(thumbnail_bytes.len()).context("thumbnail file size overflowed i64 range")?;
     let (thumbnail_width, thumbnail_height) = thumbnail_image.dimensions();
@@ -779,7 +781,7 @@ fn derive_image_metadata(path: &Path) -> Result<AttachmentDerivedMetadata> {
     let thumbnail_image = image.thumbnail(THUMBNAIL_MAX_DIMENSION, THUMBNAIL_MAX_DIMENSION);
     let thumbnail_bytes = encode_thumbnail_jpeg(&thumbnail_image)
         .with_context(|| format!("failed to encode thumbnail for '{}'", path.display()))?;
-    let thumbnail_md5 = format!("{:x}", Md5::digest(&thumbnail_bytes));
+    let thumbnail_md5 = bytes_to_hex_lower(&Md5::digest(&thumbnail_bytes));
     let thumbnail_size =
         i64::try_from(thumbnail_bytes.len()).context("thumbnail file size overflowed i64 range")?;
     let (thumbnail_width, thumbnail_height) = thumbnail_image.dimensions();
@@ -844,7 +846,7 @@ fn compute_md5_for_file(path: &Path) -> Result<String> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(bytes_to_hex_lower(&hasher.finalize()))
 }
 
 fn canonical_attachment_path(path: &Path) -> Result<String> {
@@ -1080,7 +1082,10 @@ mod tests {
                 );
             }
             assert_eq!(fs::read(&path).expect("original should read"), bytes);
-            assert_eq!(attachment.md5_body, format!("{:x}", Md5::digest(&bytes)));
+            assert_eq!(
+                attachment.md5_body,
+                bytes_to_hex_lower(&Md5::digest(&bytes))
+            );
         }
     }
 

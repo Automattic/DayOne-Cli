@@ -13,7 +13,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
-use rsa::rand_core::{OsRng, RngCore};
+use getrandom::SysRng;
+use rsa::rand_core::{Rng, UnwrapErr};
 use serde::Serialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -1297,7 +1298,7 @@ pub fn utc_timestamp() -> String {
 
 fn new_invocation_id() -> String {
     let mut bytes = [0_u8; 16];
-    OsRng.fill_bytes(&mut bytes);
+    UnwrapErr(SysRng).fill_bytes(&mut bytes);
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     format!(
