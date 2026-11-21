@@ -199,6 +199,7 @@ fn is_known_command(value: &str) -> bool {
             | "list"
             | "search"
             | "sync"
+            | "export"
             | "outbox"
             | "sync-schedule"
             | "tui"

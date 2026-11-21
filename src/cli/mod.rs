@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crate::commands::{
     auth_key_set, auth_login, auth_logout, auth_setup, comment, context_item_write, daily_chat_add,
-    doctor, embeddings, entry_delete, entry_read, entry_tag, entry_write, journal_create,
+    doctor, embeddings, entry_delete, entry_read, entry_tag, entry_write, export, journal_create,
     journal_update, list, memory_process, outbox, profile, search, sync, sync_schedule,
     user_settings_get,
 };
@@ -55,6 +55,12 @@ enum TopLevelCommand {
     List(ListCommand),
     Search(SearchCommand),
     Sync(SyncCliArgs),
+    /// Sync and export journals, entries, and original attachments to an unencrypted ZIP.
+    Export {
+        /// ZIP file path. This command does not replace an existing file.
+        #[arg(long, value_name = "PATH")]
+        output: PathBuf,
+    },
     /// Inspect and recover the local sync outbox (offline; no network access).
     Outbox(OutboxCommand),
     /// Manage automatic background sync scheduling for the active profile.
@@ -1097,6 +1103,9 @@ async fn dispatch_command(
         TopLevelCommand::List(cmd) => dispatch_list(cmd, store)?,
         TopLevelCommand::Search(cmd) => dispatch_search(cmd, store)?,
         TopLevelCommand::Sync(args) => dispatch_sync(base_url, args, store).await?,
+        TopLevelCommand::Export { output } => {
+            print_json(&export::execute(store, base_url, output).await?)?;
+        }
         TopLevelCommand::Outbox(cmd) => dispatch_outbox(base_url, cmd, store)?,
         TopLevelCommand::SyncSchedule(cmd) => {
             dispatch_sync_schedule(cmd, config_dir, profile_name, base_url)?
@@ -1806,6 +1815,7 @@ fn top_level_command_name(command: &TopLevelCommand) -> &'static str {
         TopLevelCommand::List(_) => "list",
         TopLevelCommand::Search(_) => "search",
         TopLevelCommand::Sync(_) => "sync",
+        TopLevelCommand::Export { .. } => "export",
         TopLevelCommand::Outbox(_) => "outbox",
         TopLevelCommand::SyncSchedule(_) => "sync-schedule",
         TopLevelCommand::Tui => "tui",
@@ -1892,6 +1902,7 @@ fn subcommand_label(command: &TopLevelCommand) -> Option<&'static str> {
         }),
         TopLevelCommand::Setup
         | TopLevelCommand::Sync(_)
+        | TopLevelCommand::Export { .. }
         | TopLevelCommand::Tui
         | TopLevelCommand::Doctor(_) => None,
     }

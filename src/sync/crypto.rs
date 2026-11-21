@@ -1348,6 +1348,7 @@ pub(crate) mod test_support {
     use super::*;
     use rsa::PrivateKey;
     use rsa::pkcs1::EncodeRsaPrivateKey;
+    use rsa::pkcs8::EncodePublicKey;
     use serde_json::json;
 
     pub(crate) const TEST_USER_ID: &str = "2468135790";
@@ -1392,11 +1393,14 @@ pub(crate) mod test_support {
 
         let journal_private =
             PrivateKey::new(&mut rng, 2048).expect("journal rsa key should generate");
-        let journal_private_der = journal_private
-            .to_pkcs1_der()
-            .expect("journal private key should encode")
-            .as_bytes()
-            .to_vec();
+        let journal_private_pem = journal_private
+            .to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)
+            .expect("journal private key should encode");
+        let journal_public = journal_private.to_public_key();
+        let journal_public_pem = journal_public
+            .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
+            .expect("journal public key should encode");
+        let journal_public_der = journal_public.to_public_key_der().unwrap();
 
         let mut vault_key = [0_u8; 32];
         rng.fill_bytes(&mut vault_key);
@@ -1405,10 +1409,21 @@ pub(crate) mod test_support {
             .expect("vault key should wrap to user public key");
 
         let journal_encrypted_private_key =
-            encrypt_d1_mode0_with_key(&journal_private_der, &vault_key)
+            encrypt_d1_mode0_with_key(journal_private_pem.as_bytes(), &vault_key)
                 .expect("journal private key should D1-encrypt");
-        let fingerprint_hex =
-            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".to_owned();
+        let fingerprint_hex = bytes_to_hex_lower(&Sha256::digest(journal_public_der.as_bytes()));
+        let mut signed = journal_public_pem.as_bytes().to_vec();
+        signed.extend(
+            BASE64_STANDARD
+                .decode(&journal_encrypted_private_key)
+                .unwrap(),
+        );
+        let signature = user_private
+            .sign(
+                rsa::pkcs1v15::Pkcs1v15Sign::new::<Sha256>(),
+                &Sha256::digest(signed),
+            )
+            .unwrap();
 
         let journal = json!({
             "id": "journal-e2e",
@@ -1420,7 +1435,9 @@ pub(crate) mod test_support {
                     "keys": [
                         {
                             "fingerprint": fingerprint_hex,
-                            "encrypted_private_key": journal_encrypted_private_key
+                            "public_key": journal_public_pem,
+                            "encrypted_private_key": journal_encrypted_private_key,
+                            "updated": {"fingerprint": "aa11", "signature": BASE64_STANDARD.encode(signature)}
                         }
                     ]
                 }

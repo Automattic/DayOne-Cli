@@ -17,7 +17,7 @@ use sha2::Sha256;
 
 use crate::util::normalize_entry_id;
 
-const MAX_ATTACHMENT_FILE_SIZE_BYTES: u64 = 500 * 1024 * 1024;
+pub(crate) const MAX_ATTACHMENT_FILE_SIZE_BYTES: u64 = 500 * 1024 * 1024;
 pub const MAX_ATTACHMENTS_PER_ENTRY: usize = 1000;
 const MAX_IMAGE_DIMENSION: u32 = 16_384;
 const MAX_IMAGE_TOTAL_PIXELS: u64 = 67_108_864; // 8192x8192
