@@ -11,10 +11,16 @@ steps:
   # This condition runs before the child-step credentials plugin loads.
   - group: ":apple: macOS"
     key: macos
-    if: |
-      build.source_event == "push" &&
-      build.tag =~ /^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$$/
     steps:
+      - label: "[DO NOT MERGE] Assert Xcode and Ruby on $IMAGE_ID"
+        command: |
+          xcodebuild -version
+          xcodebuild -version | grep -qx "Xcode $$(sed -E 's/^~> ?//; s/-v[0-9]+$$//' .xcode-version)" \
+            || { echo "ASSERTION FAILED: image Xcode does not match .xcode-version"; exit 1; }
+          ruby -v
+          [ "$$(ruby -e 'print RUBY_VERSION')" = "$$(cat .ruby-version)" ] \
+            || { echo "ASSERTION FAILED: Ruby does not match .ruby-version"; exit 1; }
+
       - label: "Build, sign, notarize (arm64)"
         key: macos-arm64
         command: .buildkite/commands/build-sign-notarize.sh aarch64-apple-darwin dayone-darwin-arm64
