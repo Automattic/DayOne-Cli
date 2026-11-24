@@ -625,7 +625,6 @@ pub(crate) fn merge_payload_value(record: &mut Entry, payload: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entry_embeddings::source_hash_for_searchable_text;
     use crate::http::fake::FakeApiClient;
     use crate::store::sqlite::Store;
     use rusqlite::params;
@@ -1876,7 +1875,7 @@ mod tests {
         let static_params = vec![("groups".to_owned(), "journal-1".to_owned())];
         let mut embeddings = EmbeddingSyncOutput::new(true);
 
-        let source_hash = format!("{:x}", Sha256::digest(b"hash-stable body"));
+        let source_hash = crate::util::bytes_to_hex_lower(&Sha256::digest(b"hash-stable body"));
 
         store
             .upsert_entry_embedding("entry-1", "journal-1", &source_hash, &[9.0, 9.0, 9.0])

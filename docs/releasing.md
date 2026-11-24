@@ -11,6 +11,7 @@ Pull requests and `main` build both macOS release variants on GitHub-hosted runn
 ## Step 1: Build Binaries
 
 1. Confirm the release commit is on `main` and CI is green.
+   Before pushing a public release tag, prepare the release notes as described in [Review release notes](#review-release-notes).
 2. Create and push the version tag:
 
    ```bash
@@ -29,6 +30,26 @@ Embedding availability:
 - On older/unknown glibc, the launcher prefers the `-no-embeddings` package for compatibility.
 - `-no-embeddings` Linux variants are built on Ubuntu 22.04 to target glibc 2.35.
 - The Windows x64 release excludes embeddings so it does not require the VC++ runtime used by fastembed/ONNX. Keyword search remains available.
+
+### Review release notes
+
+Both release creators use `scripts/release-notes.py` to generate notes from the public `Automattic/DayOne-Cli` repository on github.com. The script does not read local Git remotes or private repository metadata. It requires Python 3 and an authenticated `gh` CLI with `gh api --slurp` support.
+
+For a stable tag, the script passes GitHub an explicit previous stable tag. It selects the highest semantic version below the new version across all release pages. Drafts, prereleases, the current version, and newer versions cannot become the baseline. Release dates and API ordering do not affect the choice, including for backport tags. Build metadata does not affect version precedence.
+
+For a prerelease, the script selects the highest lower version in the same channel, such as `rc`, then falls back to the previous stable version. If no eligible baseline exists, it generates a full-history link instead of letting GitHub choose an RC or newer version as an implicit baseline. Maintainers must write the initial release summary in that case.
+
+Preview the generated notes without creating a release:
+
+```bash
+python3 scripts/release-notes.py v0.22.0
+```
+
+GitHub's generated notes are a starting point, not a complete user-facing changelog. Review them and add notable features, fixes, breaking changes, and migration instructions before publishing. Do not include private repository links or internal details.
+
+To review before GitHub publication, create a draft release for the intended tag in the public repository, add the reviewed notes, and then push the tag. Both pipelines upload to an existing draft without publishing it or replacing its body. When every asset is ready, publish the draft. If no draft exists, the first successful creator publishes the generated notes automatically. Review those notes before publishing to npm.
+
+Existing release notes, including maintainer edits, remain unchanged on retries. If another build wins the creation race, the losing build uploads only its assets. To verify the baseline rules offline, run `python3 scripts/test_release_notes.py`.
 
 ## Step 2: Publish to npm
 
@@ -69,7 +90,7 @@ Treat the workflow files as authoritative if this document and CI differ.
 
 ## Validate a Release Candidate
 
-1. Push a prerelease tag from the intended release commit (for example, `v0.22.0-rc.1`). Tags containing `-` create a GitHub prerelease.
+1. Push a prerelease tag from the intended release commit (for example, `v0.22.0-rc.1`). Tags containing `-` before any `+` build metadata create a GitHub prerelease.
 2. Wait for GitHub Actions and both Buildkite jobs to pass.
 3. Confirm the prerelease contains all seven platform binaries plus `LICENSE` and `LICENSE-NOTICE`, and that every binary reports the tag version. Run `dayone doctor` for each build and confirm `environment.build_sha` matches the tagged commit rather than `unknown`.
 4. On both macOS architectures, verify the signature and notarization requirement:

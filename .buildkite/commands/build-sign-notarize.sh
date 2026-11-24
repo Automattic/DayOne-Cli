@@ -101,14 +101,19 @@ if [[ "$release_tag" == v* ]]; then
   cp "$binary" "dist/$asset_name"
   chmod +x "dist/$asset_name"
 
-  if ! gh release view "$release_tag" --repo Automattic/DayOne-Cli >/dev/null 2>&1; then
-    release_flags=(--verify-tag --generate-notes)
-    [[ "$release_tag" == *-* ]] && release_flags+=(--prerelease)
+  repo=https://github.com/Automattic/DayOne-Cli
+  if ! gh release view "$release_tag" --repo "$repo" >/dev/null 2>&1; then
+    notes=$(mktemp)
+    trap 'rm -f "$notes"' EXIT
+    python3 scripts/release-notes.py "$release_tag" > "$notes"
+    release_flags=(--verify-tag --notes-file "$notes")
+    [[ "${release_tag%%+*}" == *-* ]] && release_flags+=(--prerelease)
     # GitHub Actions or the other architecture may win this creation race.
-    gh release create "$release_tag" --repo Automattic/DayOne-Cli "${release_flags[@]}" \
-      || gh release view "$release_tag" --repo Automattic/DayOne-Cli >/dev/null
+    # Never replace an existing release body, including maintainer-authored notes.
+    gh release create "$release_tag" --repo "$repo" "${release_flags[@]}" \
+      || gh release view "$release_tag" --repo "$repo" >/dev/null
   fi
   gh release upload "$release_tag" "dist/$asset_name" \
-    --repo Automattic/DayOne-Cli --clobber
+    --repo "$repo" --clobber
   rm -f "dist/$asset_name"
 fi

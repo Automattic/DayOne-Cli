@@ -11,9 +11,6 @@
   },
   "files": ["run.js", "LICENSE", "LICENSE-NOTICE"],
   "type": "module",
-  "dependencies": {
-    "update-notifier": "7.3.1"
-  },
   "optionalDependencies": {
     "@dayone/cli-darwin-arm64": "0.1.0",
     "@dayone/cli-darwin-x64": "0.1.0",

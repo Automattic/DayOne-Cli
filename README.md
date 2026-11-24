@@ -61,6 +61,31 @@ On Windows, rename the download to `dayone.exe` and move it into a directory on 
 
 If an older, unrelated `dayone` binary still resolves first, locate it with `which dayone` (`where.exe dayone` on Windows) and remove it before installing this CLI.
 
+### Updates and release notes
+
+Check for an update and read what it adds, without installing anything or signing in:
+
+```bash
+dayone updates
+dayone updates --since 0.21.0
+dayone updates --channel preview
+dayone updates --offline
+```
+
+The JSON report includes `installed_version`, `latest_version`, `status`, `update_available`, `release_url`, `update_instructions`, and `releases`. Each release contains its version, public URL, and Markdown notes. Notes cover versions after `since`, which defaults to the installed version, through the available version. See [GitHub Releases](https://github.com/Automattic/DayOne-Cli/releases) for the full changelog.
+
+`status` is `update_available`, `up_to_date`, `ahead`, or `unknown`. Failed checks and stale or missing offline caches return `ok: false`, `status: "unknown"`, and `update_available: null`, not an up-to-date result. Expected discovery failures still exit successfully so consumers can read the JSON. `checked_at` is Unix time in seconds. `notes_complete: false` and `notes_error` identify missing or truncated release notes independently of update availability.
+
+npm installations check the public npm registry; direct binaries check public GitHub releases and require an uploaded binary for their platform and build variant. Stable builds default to the stable channel. Prerelease builds default to preview, which also includes newer stable versions. npm preview checks both `next` and `latest`. The CLI never downloads or installs an update automatically.
+
+Both installation methods print cached update notices to stderr, including for AI agents without a terminal. stdout remains unchanged. Setup, login, sync, and user-settings commands can start a background check when the cache is older than 24 hours. Failed background checks retry no more than once an hour. Local-only commands can show cached notices but do not start network checks. Help, version output, and the TUI do not show notices.
+
+Set `NO_UPDATE_NOTIFIER=1` or `DAYONE_NO_UPDATE_NOTIFIER=1` to disable automatic checks and notices. They are also disabled when `CI` is set or `npm_config_update_notifier=false`. Explicit `dayone updates` still checks when notifications are disabled; use `--offline` to prevent its network requests.
+
+Release discovery uses unauthenticated requests to `api.github.com` and, for npm installs, `registry.npmjs.org`. Those services receive normal connection information, including your IP address, but no Day One credentials, account identifiers, journal data, or telemetry events. Checks have a 12-second total timeout. If notes time out after availability is known, the result keeps that availability and marks the notes incomplete.
+
+The cache contains only public release metadata and check timestamps, under the platform cache directory's `dayone-cli` folder, or `DAYONE_CONFIG_DIR` when set. Ordinary commands read a separate notification record limited to 4 KiB, not the release-note history. Caches are separated by installation method, channel, platform, and build variant. Account configuration and shared secrets are not loaded by `dayone updates`.
+
 ## AI Agent Skills (Optional)
 
 This repository ships a single agent skill at [`skills/dayone-cli/`](skills/dayone-cli/SKILL.md) for AI agent integrations like Claude Code, Cursor, and similar. The top-level [`SKILL.md`](skills/dayone-cli/SKILL.md) is the entry point, with per-command-group references under [`skills/dayone-cli/references/`](skills/dayone-cli/references/).

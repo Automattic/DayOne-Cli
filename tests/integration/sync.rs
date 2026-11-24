@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 struct SyncServer {
     url: String,
@@ -144,7 +143,7 @@ fn sync_reports_embedding_failure_after_preserving_data_and_finishing_other_work
         .unwrap();
     }
     db.execute("INSERT INTO entry_embeddings (entry_id, journal_id, source_hash, embedding_json, dimension) VALUES ('entry-current', 'journal-a', ?1, ?2, 384)",
-        params![format!("{:x}", Sha256::digest(b"Already indexed")), json!(vec![0.0; 384]).to_string()]).unwrap();
+        params![super::sha256_hex(b"Already indexed"), json!(vec![0.0; 384]).to_string()]).unwrap();
 
     let output = server.run(root.path(), &["sync"]);
     let summary: Value = serde_json::from_slice(&output.stdout).unwrap();

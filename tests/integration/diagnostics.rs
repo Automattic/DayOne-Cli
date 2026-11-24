@@ -15,6 +15,7 @@ fn unique_tmp_dir(label: &str) -> PathBuf {
 fn run_dayone(config_dir: &Path, args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_dayone"))
         .env("DAYONE_CONFIG_DIR", config_dir)
+        .env("NO_UPDATE_NOTIFIER", "1")
         .env("DAYONE_TELEMETRY", "0")
         .args(args)
         .output()
@@ -398,8 +399,6 @@ fn embedding_index_check(report: &Value) -> &Value {
 #[cfg(feature = "embeddings")]
 #[test]
 fn doctor_embedding_index_counts_missing_stale_and_current_without_mutation() {
-    use sha2::{Digest, Sha256};
-
     let root = embedding_doctor_fixture();
     let db = root.path().join("profiles/production/dayone.db");
     let connection = rusqlite::Connection::open(&db).expect("database");
@@ -425,10 +424,7 @@ fn doctor_embedding_index_counts_missing_stale_and_current_without_mutation() {
             rusqlite::params![id, raw, deleted],
         ).expect("entry");
     }
-    let current_hash = format!(
-        "{:x}",
-        Sha256::digest(b"private title\nprivate root body\nprivate payload body")
-    );
+    let current_hash = super::sha256_hex(b"private title\nprivate root body\nprivate payload body");
     for (id, hash) in [
         ("private-stale", "private-old-hash"),
         ("private-current", current_hash.as_str()),
@@ -488,8 +484,6 @@ fn doctor_embedding_index_counts_missing_stale_and_current_without_mutation() {
 #[cfg(feature = "embeddings")]
 #[test]
 fn doctor_embedding_index_distinguishes_empty_current_stale_and_missing() {
-    use sha2::{Digest, Sha256};
-
     let root = embedding_doctor_fixture();
     let report = embedding_doctor_report(root.path());
     let check = embedding_index_check(&report);
@@ -505,7 +499,7 @@ fn doctor_embedding_index_distinguishes_empty_current_stale_and_missing() {
     ).expect("entry");
     connection.execute(
         "INSERT INTO entry_embeddings (entry_id, journal_id, source_hash, embedding_json, dimension) VALUES ('private-current', 'private-journal', ?1, '[]', 384)",
-        [format!("{:x}", Sha256::digest(b"private payload only"))],
+        [super::sha256_hex(b"private payload only")],
     ).expect("embedding metadata");
     let report = embedding_doctor_report(root.path());
     let check = embedding_index_check(&report);

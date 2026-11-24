@@ -75,19 +75,15 @@ Example platform `package.json`:
 - On Linux, checks glibc version and prefers standard packages when glibc is `>= 2.39`, otherwise prefers `-no-embeddings` packages
 - Resolves the binary path via `createRequire` + `require.resolve`
 - Delegates via `execFileSync` with `stdio: 'inherit'`
-- **Update notifier:** Uses `update-notifier@7` (ESM) to check for new versions
-  - ~~Only shows notices when `process.stderr.isTTY` is true (suppressed in CI and agentic contexts)~~ Shows in all contexts including non-TTY (AI agents) — bypasses update-notifier's built-in `stdout.isTTY` guard
-  - Output goes to **stderr** to preserve JSON stdout for machine consumers
-  - Persists cached update so the notice shows on every run until the user updates (update-notifier's default is one-shot)
-  - Compares against installed `package.json` version (not stale cached version) to prevent false downgrade notices
-  - Also suppressed via `NO_UPDATE_NOTIFIER=1` env var (standard convention)
+- Sets `DAYONE_INSTALL_METHOD=npm` for the child. The Rust binary owns version comparison, public release metadata, caching, and stderr notices for both installation methods. The launcher no longer depends on `update-notifier`.
+- See [Updates and release notes](../README.md#updates-and-release-notes) for the command, channels, cache policy, and opt-outs.
 - **Signal forwarding:** Re-raises signals so parent sees proper signal exit (e.g. Ctrl-C)
 
 ## Agentic Invocation
 
 The binary ends up on `$PATH` after global install, so agents (Claude Code, etc.) can call `dayone <subcommand>` directly. The ~50ms Node shim overhead is negligible for API-calling commands.
 
-~~The TTY guard on update-notifier ensures agents get clean stdout/stderr without update notices.~~ Update notices go to stderr so agents get clean stdout. Agents see the update notice on stderr, which is intentional — they can prompt users to update.
+Update notices go to stderr so agents get clean stdout. Agents can run `dayone updates` to read the installed and available versions, intervening release notes, and update instructions as JSON. The command never installs an update.
 
 ## CI Build Matrix
 
