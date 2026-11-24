@@ -320,6 +320,69 @@ impl DayOneApiClient for SyncApiClient {
         Ok(())
     }
 
+    async fn download_media(
+        &self,
+        journal_id: &str,
+        moment_id: &str,
+        thumbnail: bool,
+    ) -> Result<Option<Vec<u8>>> {
+        let api_path = crate::http::moment_download_path(journal_id, moment_id);
+        let url = format!("{}/api{}", self.base_url, api_path);
+        let mut trace = HttpTrace::api("GET", &api_path, Some(0));
+        let mut headers = bearer_web_headers(&self.token, &self.device_info)?;
+        // Ask the server to answer with the signed storage URL instead of a
+        // redirect so the bearer token is never replayed to the storage host.
+        headers.insert(
+            HeaderName::from_static("x-manual-redirect"),
+            HeaderValue::from_static("true"),
+        );
+        let response = self
+            .client
+            .get(url)
+            .headers(headers)
+            .query(&[("thumbnail", thumbnail.to_string())])
+            .send()
+            .await
+            .context("failed to send media download request")?;
+        trace.response(response.status().as_u16(), response.content_length());
+        if response.status() == StatusCode::NOT_FOUND {
+            trace.finish(Some(0));
+            return Ok(None);
+        }
+        let response = ensure_success(response).await?;
+        let redirect = response
+            .headers()
+            .get("x-manual-redirect-location")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let response = match redirect {
+            Some(location) => {
+                if !(location.starts_with("https://") || location.starts_with("http://")) {
+                    anyhow::bail!("media download redirect had an unsupported URL scheme");
+                }
+                // Signed storage URL: no Day One credentials are attached.
+                let stored = self
+                    .client
+                    .get(&location)
+                    .send()
+                    .await
+                    .context("failed to fetch media from storage")?;
+                if stored.status() == StatusCode::NOT_FOUND {
+                    trace.finish(Some(0));
+                    return Ok(None);
+                }
+                ensure_success(stored).await?
+            }
+            None => response,
+        };
+        let bytes = response
+            .bytes()
+            .await
+            .context("failed to read media download body")?;
+        trace.finish(byte_len(&bytes));
+        Ok(Some(bytes.to_vec()))
+    }
+
     async fn put_bytes_to_absolute_url(
         &self,
         url: &str,
@@ -395,6 +458,7 @@ fn parse_json_or_ndjson(body: &str) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::{DeviceInfo, SyncApiClient, parse_json_or_ndjson};
+    use crate::http::DayOneApiClient as _;
 
     #[test]
     fn ndjson_rejects_a_malformed_line_instead_of_dropping_it() {
@@ -479,5 +543,77 @@ mod tests {
                 assert!(!error.to_string().contains(body));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn download_media_follows_signed_url_without_leaking_credentials() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        fn read_request(socket: &mut std::net::TcpStream) -> String {
+            socket
+                .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                .unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            String::from_utf8(request).unwrap()
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let signed = format!("{url}/signed/object?sig=abc");
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for step in 0..4 {
+                let (mut socket, _) = listener.accept().unwrap();
+                let request = read_request(&mut socket);
+                let (status, extra, body): (&str, String, &[u8]) = match step {
+                    0 => (
+                        "204 No Content",
+                        format!("X-Manual-Redirect-Location: {signed}\r\n"),
+                        b"",
+                    ),
+                    1 => ("200 OK", String::new(), b"media-bytes"),
+                    2 => ("404 Not Found", String::new(), b"missing"),
+                    _ => ("200 OK", String::new(), b"direct-bytes"),
+                };
+                write!(
+                    socket,
+                    "HTTP/1.1 {status}\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                socket.write_all(body).unwrap();
+                requests.push(request);
+            }
+            requests
+        });
+        let api =
+            SyncApiClient::new(&url, "synthetic-token", DeviceInfo::resolve(Some("77"))).unwrap();
+
+        let bytes = api.download_media("j /", "m1", true).await.unwrap();
+        assert_eq!(bytes.as_deref(), Some(&b"media-bytes"[..]));
+        // 404 from the API (no such moment) is "no media", not an error.
+        assert_eq!(api.download_media("j", "m2", false).await.unwrap(), None);
+        // A server that answers with the bytes directly is accepted too.
+        let direct = api.download_media("j", "m3", false).await.unwrap();
+        assert_eq!(direct.as_deref(), Some(&b"direct-bytes"[..]));
+
+        let requests = server.join().unwrap();
+        let first = requests[0].to_ascii_lowercase();
+        assert!(requests[0].starts_with(
+            "GET /api/journals/j%20%2F/attachments/m1/download?thumbnail=true HTTP/1.1"
+        ));
+        assert!(first.contains("authorization: bearer synthetic-token"));
+        assert!(first.contains("x-manual-redirect: true"));
+        let second = requests[1].to_ascii_lowercase();
+        assert!(requests[1].starts_with("GET /signed/object?sig=abc HTTP/1.1"));
+        assert!(!second.contains("authorization"), "{second}");
+        assert!(!second.contains("device-info"), "{second}");
+        assert!(requests[2].contains("thumbnail=false"));
     }
 }

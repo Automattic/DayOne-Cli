@@ -915,15 +915,17 @@ fn inspect_scale(connection: &Connection) -> CheckOutcome {
     let details = ScaleDetails {
         journals: table_count(connection, "journals"),
         entries: table_count(connection, "entries"),
-        attachments: table_count(connection, "entry_attachments"),
+        attachments: table_count(connection, "entry_attachments")
+            .map(|uploaded| uploaded + downloaded_media_count(connection).unwrap_or(0)),
         media_bytes: if table_exists(connection, "entry_attachments") {
             connection
                 .query_row(
                     "SELECT COALESCE(SUM(file_size_bytes), 0) FROM entry_attachments",
                     [],
-                    |row| row.get(0),
+                    |row| row.get::<_, i64>(0),
                 )
                 .ok()
+                .map(|uploaded| uploaded + downloaded_media_bytes(connection).unwrap_or(0))
         } else {
             None
         },
@@ -1359,6 +1361,35 @@ fn table_exists(connection: &Connection, table: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Files fetched by `sync --media` (originals only, so a photo counts once).
+/// `None` when the table is absent (a database from before media downloads).
+fn downloaded_media_count(connection: &Connection) -> Option<i64> {
+    if !table_exists(connection, "moment_media") {
+        return None;
+    }
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM moment_media WHERE kind = 'original'",
+            [],
+            |row| row.get(0),
+        )
+        .ok()
+}
+
+/// Bytes on disk for all downloaded files, thumbnails included.
+fn downloaded_media_bytes(connection: &Connection) -> Option<i64> {
+    if !table_exists(connection, "moment_media") {
+        return None;
+    }
+    connection
+        .query_row(
+            "SELECT COALESCE(SUM(file_size_bytes), 0) FROM moment_media",
+            [],
+            |row| row.get(0),
+        )
+        .ok()
+}
+
 fn table_count(connection: &Connection, table: &'static str) -> Option<i64> {
     if !table_exists(connection, table) {
         return None;
@@ -1737,5 +1768,40 @@ mod tests {
         assert_eq!(outcome.status, CheckStatus::Fail);
         assert_eq!(outcome.summary, "Sync lock timestamp is in the future");
         assert_eq!(outcome.details.expect("details")["lock_state"], "invalid");
+    }
+
+    #[test]
+    fn scale_counts_downloaded_media_without_exposing_paths_or_names() {
+        use crate::store::entries::media::{MomentMediaKind, MomentMediaUpsert};
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::open_at(temp.path().join("dayone.db")).unwrap();
+        for (moment, kind, size) in [
+            ("m1", MomentMediaKind::Original, 1000),
+            ("m1", MomentMediaKind::Thumbnail, 10),
+            ("m2", MomentMediaKind::Original, 500),
+        ] {
+            store
+                .upsert_moment_media(&MomentMediaUpsert {
+                    journal_id: "secret-journal",
+                    entry_id: "secret-entry",
+                    moment_id: moment,
+                    kind,
+                    rel_path: "media/secret-journal/secret-entry/private-name.jpg",
+                    file_size_bytes: size,
+                    md5: "x",
+                    source_md5: None,
+                })
+                .unwrap();
+        }
+        let connection = Connection::open(temp.path().join("dayone.db")).unwrap();
+        let outcome = inspect_scale(&connection);
+        let json = serde_json::to_string(&outcome).unwrap();
+        // Two photos (thumbnails are not counted again); bytes include both files.
+        assert!(json.contains("\"attachments\":2"), "{json}");
+        assert!(json.contains("\"media_bytes\":1510"), "{json}");
+        for private in ["secret-journal", "secret-entry", "private-name", "media/"] {
+            assert!(!json.contains(private), "{json}");
+        }
     }
 }
