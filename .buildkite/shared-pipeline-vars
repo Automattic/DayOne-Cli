@@ -3,7 +3,7 @@
 # Sourced before `buildkite-agent pipeline upload` so the values land in the
 # rendered pipeline, keeping plugin pins and the agent image id out of pipeline.yml.
 
-CI_TOOLKIT_PLUGIN_VERSION='6.2.0'
+CI_TOOLKIT_PLUGIN_VERSION='8.0.1'
 
 # The `~>` modifier is not currently used, but we strip it just in case.
 XCODE_VERSION=$(sed -E 's/^~> ?//' .xcode-version)
