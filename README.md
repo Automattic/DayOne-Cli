@@ -160,6 +160,16 @@ dayone sync-schedule disable
 
 `sync-schedule` uses per-user schedulers: LaunchAgent on macOS, systemd user timers on Linux, and Task Scheduler on Windows. Output is JSON, like other commands.
 
+### Export a journal backup
+
+```bash
+dayone export --output ./dayone-backup.zip
+```
+
+Export runs a normal sync first, which can upload queued changes. It writes one JSON file per journal and includes the original attachments for live entries. If a journal or entry sync fails, or if an attachment cannot be fetched or decrypted, the CLI does not save a ZIP at the requested path. It does not replace an existing file.
+
+The ZIP is unencrypted. Choose a location where you can protect it. The CLI does not keep a separate copy of the downloaded media. If the process stops abruptly, it can leave a partial `.dayone-export-*` file in the destination directory.
+
 ### Entries
 
 This section describes the current source. npm version `0.22.1` does not include `entry tag`, `--tag`, or the time-zone, star, and location options below. Check `dayone entry write --help` for the options in your installed binary.
