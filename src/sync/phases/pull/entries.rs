@@ -14,7 +14,7 @@ pub(super) async fn run_entries_feed_resource<C: DayOneApiClient>(
         api_path,
         static_params,
         entries_decryptor,
-        embeddings_enabled,
+        embeddings,
     } = params;
     log_sync(format!("resource start kind=entries key={resource_key}"));
     let started = now_epoch_ms();
@@ -220,54 +220,7 @@ pub(super) async fn run_entries_feed_resource<C: DayOneApiClient>(
                 error = Some(err.to_string());
                 break;
             }
-            if *embeddings_enabled {
-                let record_value = match entry_to_value(&record.record) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        log_sync(format!(
-                            "entry serialization failed before embedding id={entry_id}: {err}"
-                        ));
-                        continue;
-                    }
-                };
-                let searchable_text = entry_searchable_text(&record_value);
-                let Some(computed_hash) = source_hash_for_searchable_text(&searchable_text) else {
-                    continue;
-                };
-                let existing_hash = match store.get_entry_embedding_source_hash(&entry_id) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        log_sync(format!(
-                            "entry embedding hash lookup failed id={entry_id}: {err}"
-                        ));
-                        None
-                    }
-                };
-                if existing_hash.as_deref() == Some(computed_hash.as_str()) {
-                    continue;
-                }
-                match compute_embedding_for_searchable_text(&searchable_text) {
-                    Ok(Some(embedding)) => {
-                        if let Err(err) = store.upsert_entry_embedding(
-                            &entry_id,
-                            &entry_journal_id,
-                            &computed_hash,
-                            &embedding,
-                        ) {
-                            log_sync(format!(
-                                "entry embedding upsert failed id={entry_id}: {err}"
-                            ));
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(err) => {
-                        log_sync(format!(
-                            "entry embedding generation failed id={entry_id}: {err}; disabling embedding generation for the remaining entries in this sync run"
-                        ));
-                        *embeddings_enabled = false;
-                    }
-                }
-            }
+            embeddings.update_entry(store, &entry_id, &entry_journal_id, &server_value);
             changed_count += 1;
         }
         if status == "error" {
@@ -742,7 +695,7 @@ mod tests {
         let path = test_store_path("feed-legacy-malformed-payload-progress");
         let store = Store::open_at(&*path).expect("store should open");
         let static_params = vec![("groups".to_owned(), "journal-1".to_owned())];
-        let mut embeddings_enabled = false;
+        let mut embeddings = EmbeddingSyncOutput::new(false);
         let payload = b"{not valid json";
         let api = FakeApiClient::new()
             .with_bytes_fixture(
@@ -778,7 +731,7 @@ mod tests {
                 api_path: "/v2/sync/entries/journal-1/feed",
                 static_params: &static_params,
                 entries_decryptor: None,
-                embeddings_enabled: &mut embeddings_enabled,
+                embeddings: &mut embeddings,
             },
         )
         .await;
@@ -825,7 +778,7 @@ mod tests {
             journal_keys_by_fingerprint: HashMap::new(),
         };
         let static_params = vec![("groups".to_owned(), "journal-1".to_owned())];
-        let mut embeddings_enabled = false;
+        let mut embeddings = EmbeddingSyncOutput::new(false);
         let plaintext_record = json!({
             "cursor": 1_712_757_550_000_i64,
             "id": "entry-before-failure",
@@ -864,7 +817,7 @@ mod tests {
                 api_path: "/v2/sync/entries/journal-1/feed",
                 static_params: &static_params,
                 entries_decryptor: Some(&decryptor),
-                embeddings_enabled: &mut embeddings_enabled,
+                embeddings: &mut embeddings,
             },
         )
         .await;
@@ -902,7 +855,7 @@ mod tests {
         let path = test_store_path("feed-revision-edit-date");
         let store = Store::open_at(&*path).expect("store should open");
         let static_params = vec![("groups".to_owned(), "journal-1".to_owned())];
-        let mut embeddings_enabled = false;
+        let mut embeddings = EmbeddingSyncOutput::new(false);
         let api = FakeApiClient::new()
             .with_bytes_fixture(
                 "GET_BYTES /v2/sync/entries/journal-1/feed",
@@ -932,7 +885,7 @@ mod tests {
                 api_path: "/v2/sync/entries/journal-1/feed",
                 static_params: &static_params,
                 entries_decryptor: None,
-                embeddings_enabled: &mut embeddings_enabled,
+                embeddings: &mut embeddings,
             },
         )
         .await;
@@ -974,7 +927,7 @@ mod tests {
             .expect("pending update outbox should save");
 
         let static_params = vec![("groups".to_owned(), "journal-1".to_owned())];
-        let mut embeddings_enabled = false;
+        let mut embeddings = EmbeddingSyncOutput::new(false);
         let api = FakeApiClient::new()
             .with_bytes_fixture(
                 "GET_BYTES /v2/sync/entries/journal-1/feed",
@@ -1004,7 +957,7 @@ mod tests {
                 api_path: "/v2/sync/entries/journal-1/feed",
                 static_params: &static_params,
                 entries_decryptor: None,
-                embeddings_enabled: &mut embeddings_enabled,
+                embeddings: &mut embeddings,
             },
         )
         .await;
@@ -1156,7 +1109,7 @@ mod tests {
             .expect("pending update outbox should save");
 
         let static_params = vec![("groups".to_owned(), "journal-1".to_owned())];
-        let mut embeddings_enabled = false;
+        let mut embeddings = EmbeddingSyncOutput::new(false);
         let api = FakeApiClient::new()
             .with_bytes_fixture(
                 "GET_BYTES /v2/sync/entries/journal-1/feed",
@@ -1187,7 +1140,7 @@ mod tests {
                 api_path: "/v2/sync/entries/journal-1/feed",
                 static_params: &static_params,
                 entries_decryptor: None,
-                embeddings_enabled: &mut embeddings_enabled,
+                embeddings: &mut embeddings,
             },
         )
         .await;
@@ -1231,7 +1184,7 @@ mod tests {
             .expect("local entry should save");
 
         let static_params = vec![("groups".to_owned(), "journal-old".to_owned())];
-        let mut embeddings_enabled = false;
+        let mut embeddings = EmbeddingSyncOutput::new(false);
         let api = FakeApiClient::new()
             .with_bytes_fixture(
                 "GET_BYTES /v2/sync/entries/journal-old/feed",
@@ -1262,7 +1215,7 @@ mod tests {
                 api_path: "/v2/sync/entries/journal-old/feed",
                 static_params: &static_params,
                 entries_decryptor: None,
-                embeddings_enabled: &mut embeddings_enabled,
+                embeddings: &mut embeddings,
             },
         )
         .await;
@@ -1319,7 +1272,7 @@ mod tests {
             .expect("pending update outbox should save");
 
         let static_params = vec![("groups".to_owned(), "journal-1".to_owned())];
-        let mut embeddings_enabled = false;
+        let mut embeddings = EmbeddingSyncOutput::new(false);
         let api = FakeApiClient::new()
             .with_bytes_fixture(
                 "GET_BYTES /v2/sync/entries/journal-1/feed",
@@ -1351,7 +1304,7 @@ mod tests {
                 api_path: "/v2/sync/entries/journal-1/feed",
                 static_params: &static_params,
                 entries_decryptor: None,
-                embeddings_enabled: &mut embeddings_enabled,
+                embeddings: &mut embeddings,
             },
         )
         .await;
@@ -1407,7 +1360,7 @@ mod tests {
             .expect("pending delete outbox should save");
 
         let static_params = vec![("groups".to_owned(), "journal-1".to_owned())];
-        let mut embeddings_enabled = false;
+        let mut embeddings = EmbeddingSyncOutput::new(false);
         let api = FakeApiClient::new()
             .with_bytes_fixture(
                 "GET_BYTES /v2/sync/entries/journal-1/feed",
@@ -1439,7 +1392,7 @@ mod tests {
                 api_path: "/v2/sync/entries/journal-1/feed",
                 static_params: &static_params,
                 entries_decryptor: None,
-                embeddings_enabled: &mut embeddings_enabled,
+                embeddings: &mut embeddings,
             },
         )
         .await;
@@ -1500,7 +1453,7 @@ mod tests {
             .expect("pending delete outbox should save");
 
         let static_params = vec![("groups".to_owned(), "journal-1".to_owned())];
-        let mut embeddings_enabled = false;
+        let mut embeddings = EmbeddingSyncOutput::new(false);
         let api = FakeApiClient::new()
             .with_bytes_fixture(
                 "GET_BYTES /v2/sync/entries/journal-1/feed",
@@ -1532,7 +1485,7 @@ mod tests {
                 api_path: "/v2/sync/entries/journal-1/feed",
                 static_params: &static_params,
                 entries_decryptor: None,
-                embeddings_enabled: &mut embeddings_enabled,
+                embeddings: &mut embeddings,
             },
         )
         .await;
@@ -1652,7 +1605,7 @@ mod tests {
         }
 
         let static_params = vec![("groups".to_owned(), "journal-1".to_owned())];
-        let mut embeddings_enabled = false;
+        let mut embeddings = EmbeddingSyncOutput::new(false);
         let api = FakeApiClient::new()
             .with_bytes_fixture(
                 "GET_BYTES /v2/sync/entries/journal-1/feed",
@@ -1684,7 +1637,7 @@ mod tests {
                 api_path: "/v2/sync/entries/journal-1/feed",
                 static_params: &static_params,
                 entries_decryptor: None,
-                embeddings_enabled: &mut embeddings_enabled,
+                embeddings: &mut embeddings,
             },
         )
         .await;
@@ -1759,7 +1712,7 @@ mod tests {
         }
 
         let static_params = vec![("groups".to_owned(), "journal-1".to_owned())];
-        let mut embeddings_enabled = false;
+        let mut embeddings = EmbeddingSyncOutput::new(false);
         let api = FakeApiClient::new()
             .with_bytes_fixture(
                 "GET_BYTES /v2/sync/entries/journal-1/feed",
@@ -1791,7 +1744,7 @@ mod tests {
                 api_path: "/v2/sync/entries/journal-1/feed",
                 static_params: &static_params,
                 entries_decryptor: None,
-                embeddings_enabled: &mut embeddings_enabled,
+                embeddings: &mut embeddings,
             },
         )
         .await;
@@ -1849,47 +1802,71 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn entries_feed_generates_embeddings_by_default() {
-        let path = test_store_path("default-embedding");
-        let store = Store::open_at(&*path).expect("store should open");
-        let static_params = vec![("groups".to_owned(), "journal-1".to_owned())];
-        let mut embeddings_enabled = true;
-
-        let api = FakeApiClient::new()
-            .with_bytes_fixture(
-                "GET_BYTES /v2/sync/entries/journal-1/feed",
-                single_line_feed_bytes(&json!({
-                    "id": "entry-1",
-                    "journal_id": "journal-1",
-                    "updated_at": "2026-04-10T00:00:00.000Z",
-                    "body": "sync should embed this entry"
-                })),
+    async fn entries_feed_reports_embedding_generation_and_storage_results() {
+        for storage_failure in [false, true] {
+            let path = test_store_path("embedding-storage");
+            let store = Store::open_at(&*path).unwrap();
+            if storage_failure {
+                store
+                    .connect()
+                    .unwrap()
+                    .execute_batch(
+                        "CREATE TRIGGER reject_embedding BEFORE INSERT ON entry_embeddings
+                     BEGIN SELECT RAISE(FAIL, 'synthetic storage failure'); END;",
+                    )
+                    .unwrap();
+            }
+            let mut embeddings = EmbeddingSyncOutput::new(true);
+            let api = FakeApiClient::new()
+                .with_bytes_fixture(
+                    "GET_BYTES /v2/sync/entries/journal-1/feed",
+                    multi_line_feed_bytes(&[
+                        json!({"id":"entry-1", "journal_id":"journal-1", "body":"First entry"}),
+                        json!({"id":"entry-2", "journal_id":"journal-1", "body":"Second entry"}),
+                    ]),
+                )
+                .await;
+            let mut resources = Vec::new();
+            run_entries_feed_resource(
+                &api,
+                &store,
+                1,
+                &mut resources,
+                EntriesFeedResourceParams {
+                    resource_key: "entries:journal-1",
+                    api_path: "/v2/sync/entries/journal-1/feed",
+                    static_params: &[],
+                    entries_decryptor: None,
+                    embeddings: &mut embeddings,
+                },
             )
             .await;
-
-        let mut resources = Vec::new();
-        run_entries_feed_resource(
-            &api,
-            &store,
-            1,
-            &mut resources,
-            EntriesFeedResourceParams {
-                resource_key: "entries:journal-1",
-                api_path: "/v2/sync/entries/journal-1/feed",
-                static_params: &static_params,
-                entries_decryptor: None,
-                embeddings_enabled: &mut embeddings_enabled,
-            },
-        )
-        .await;
-
-        let hash = store
-            .get_entry_embedding_source_hash("entry-1")
-            .expect("embedding lookup should succeed");
-        assert!(
-            hash.is_some(),
-            "entries feed should generate embeddings without a CLI toggle"
-        );
+            assert_eq!(resources[0].status, "success");
+            assert_eq!(resources[0].changed_count, 2);
+            let report = serde_json::to_value(&embeddings).unwrap();
+            assert_eq!(
+                report,
+                if storage_failure {
+                    json!({"status":"failed", "error":"storage_failed", "generated":0,
+                    "unchanged":0, "failed":1, "skipped":1})
+                } else {
+                    json!({"status":"success", "error":null, "generated":2,
+                    "unchanged":0, "failed":0, "skipped":0})
+                }
+            );
+            for id in ["entry-1", "entry-2"] {
+                assert!(
+                    store
+                        .get_entry_json_row_with_extra_fields(id)
+                        .unwrap()
+                        .is_some()
+                );
+                assert_eq!(
+                    store.get_entry_embedding_source_hash(id).unwrap().is_some(),
+                    !storage_failure
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -1897,10 +1874,9 @@ mod tests {
         let path = test_store_path("hash-skip");
         let store = Store::open_at(&*path).expect("store should open");
         let static_params = vec![("groups".to_owned(), "journal-1".to_owned())];
-        let mut embeddings_enabled = true;
+        let mut embeddings = EmbeddingSyncOutput::new(true);
 
-        let source_hash = source_hash_for_searchable_text("hash-stable body")
-            .expect("non-empty body should produce source hash");
+        let source_hash = format!("{:x}", Sha256::digest(b"hash-stable body"));
 
         store
             .upsert_entry_embedding("entry-1", "journal-1", &source_hash, &[9.0, 9.0, 9.0])
@@ -1929,7 +1905,7 @@ mod tests {
                 api_path: "/v2/sync/entries/journal-1/feed",
                 static_params: &static_params,
                 entries_decryptor: None,
-                embeddings_enabled: &mut embeddings_enabled,
+                embeddings: &mut embeddings,
             },
         )
         .await;
@@ -1943,6 +1919,14 @@ mod tests {
             Some(&[9.0, 9.0, 9.0][..]),
             "matching source hash should skip embedding overwrite"
         );
+        assert_eq!(resources[0].changed_count, 1);
+        assert_eq!(
+            serde_json::to_value(&embeddings).unwrap(),
+            json!({
+                "status":"success", "error":null, "generated":0,
+                "unchanged":1, "failed":0, "skipped":0
+            })
+        );
     }
 
     #[tokio::test]
@@ -1950,7 +1934,7 @@ mod tests {
         let path = test_store_path("embeddings-flag-disabled");
         let store = Store::open_at(&*path).expect("store should open");
         let static_params = vec![("groups".to_owned(), "journal-2".to_owned())];
-        let mut embeddings_enabled = false;
+        let mut embeddings = EmbeddingSyncOutput::new(false);
 
         let api = FakeApiClient::new()
             .with_bytes_fixture(
@@ -1975,7 +1959,7 @@ mod tests {
                 api_path: "/v2/sync/entries/journal-2/feed",
                 static_params: &static_params,
                 entries_decryptor: None,
-                embeddings_enabled: &mut embeddings_enabled,
+                embeddings: &mut embeddings,
             },
         )
         .await;
@@ -1995,7 +1979,7 @@ mod tests {
         let path = test_store_path("disable-after-first-error");
         let store = Store::open_at(&*path).expect("store should open");
         let static_params = vec![("groups".to_owned(), "journal-3".to_owned())];
-        let mut embeddings_enabled = true;
+        let mut embeddings = EmbeddingSyncOutput::new(true);
 
         let api = FakeApiClient::new()
             .with_bytes_fixture(
@@ -2028,14 +2012,17 @@ mod tests {
                 api_path: "/v2/sync/entries/journal-3/feed",
                 static_params: &static_params,
                 entries_decryptor: None,
-                embeddings_enabled: &mut embeddings_enabled,
+                embeddings: &mut embeddings,
             },
         )
         .await;
 
-        assert!(
-            !embeddings_enabled,
-            "embedding failure should disable embedding generation for the rest of the sync run"
+        assert_eq!(
+            serde_json::to_value(&embeddings).unwrap(),
+            json!({
+                "status": "failed", "error": "generation_failed",
+                "generated": 0, "unchanged": 0, "failed": 1, "skipped": 1
+            })
         );
         let first_hash = store
             .get_entry_embedding_source_hash("entry-a")

@@ -13,4 +13,5 @@ mod entry_read;
 mod memory_process;
 mod outbox;
 mod profile;
+mod sync;
 mod telemetry_consent;
