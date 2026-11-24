@@ -24,7 +24,7 @@ pbkdf2 = "0.13"
 reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "native-tls", "query"] }
 rpassword = "7"
 rsa = { version = "0.10", features = ["sha1", "pkcs1v15"] }
-rusqlite = { version = "0.42", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 semver = { version = "1", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
