@@ -1,5 +1,6 @@
 //! `dayone doctor` — emit a non-destructive, privacy-safe local diagnostic report.
 
+mod embedding_index;
 mod journal_key_encoding;
 
 use std::fs::{self, OpenOptions};
@@ -178,6 +179,7 @@ fn collect(args: &DoctorArgs) -> DoctorReport {
             checks.push(CheckOutcome::not_run(check, summary, "sqlite_unavailable"));
         }
     }
+    checks.push(embedding_index::run(connection.as_ref()));
 
     let mut check_counts = CheckCounts::default();
     for check in &checks {

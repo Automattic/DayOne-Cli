@@ -307,6 +307,261 @@ fn entry_write_tags_add_without_replacing_existing_tags() {
 }
 
 #[test]
+fn entry_write_metadata_round_trips_and_preserves_omitted_fields() {
+    let config = tempfile::tempdir().unwrap();
+    seed_local_auth_and_journal(config.path(), "j-metadata");
+    let conn = Connection::open(staging_db_path(config.path())).unwrap();
+    let entry_id = "A65AFA22B98A0DEC62EAAD3CD1CCF45D";
+    let photo = config.path().join("photo.png");
+    write_temp_attachment(&photo, tiny_png_bytes());
+    let write = |options: &[&str]| {
+        let mut args = vec![
+            "--profile",
+            "staging",
+            "entry",
+            "write",
+            "--journal-id",
+            "j-metadata",
+            "--entry-id",
+            entry_id,
+            "--body",
+            "Trip notes",
+        ];
+        args.extend_from_slice(options);
+        run_dayone(config.path(), &args);
+        let read: Value = serde_json::from_str(&run_dayone(
+            config.path(),
+            &[
+                "--profile",
+                "staging",
+                "entry",
+                "read",
+                "--entry-id",
+                entry_id,
+            ],
+        ))
+        .unwrap();
+        let queued: String = conn
+            .query_row(
+                "SELECT payload_json FROM sync_outbox WHERE resource = 'entry'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let queued: Value = serde_json::from_str(&queued).unwrap();
+        for field in [
+            "date", "timeZone", "starred", "location", "tags", "moments", "isAllDay",
+        ] {
+            assert_eq!(read["entry"][field], queued["entry_json"][field], "{field}");
+        }
+        read["entry"].clone()
+    };
+
+    let created = write(&[
+        "--date",
+        "2026-03-30T18:45:00+02:00",
+        "--time-zone",
+        "Europe/Athens",
+        "--starred",
+        "true",
+        "--latitude",
+        "40.7128",
+        "--longitude",
+        "-74.0060",
+        "--place-name",
+        "Cafe",
+        "--locality-name",
+        "New York",
+        "--country",
+        "United States",
+        "--administrative-area",
+        "NY",
+        "--street-address",
+        "1 Main Street",
+        "--tag",
+        "travel",
+        "--attach",
+        photo.to_str().unwrap(),
+    ]);
+    assert_eq!(created["date"], 1774889100000_f64);
+    assert_eq!(created["timeZone"], "Europe/Athens");
+    assert_eq!(created["starred"], true);
+    assert_eq!(created["tags"], serde_json::json!(["travel"]));
+    assert_eq!(
+        created["location"],
+        serde_json::json!({
+            "latitude": 40.7128, "longitude": -74.0060, "placeName": "Cafe",
+            "localityName": "New York", "country": "United States",
+            "administrativeArea": "NY", "streetAddress": "1 Main Street"
+        })
+    );
+    assert_eq!(created["moments"].as_array().unwrap().len(), 1);
+
+    let edited = write(&["--date", "2026-03-31T16:45:00Z"]);
+    assert_eq!(edited["date"], 1774975500000_f64);
+    for field in ["timeZone", "starred", "location", "tags", "moments"] {
+        assert_eq!(edited[field], created[field], "omitted {field}");
+    }
+    let unstarred = write(&["--starred", "false", "--time-zone", "Asia/Kathmandu"]);
+    assert_eq!(unstarred["starred"], false);
+    assert_eq!(unstarred["timeZone"], "Asia/Kathmandu");
+    assert_eq!(unstarred["date"], edited["date"]);
+    assert_eq!(unstarred["location"], created["location"]);
+
+    for (lat, lon, expected_lat, expected_lon) in [
+        ("-90", "180", -90.0, 180.0),
+        ("90", "-180", 90.0, -180.0),
+        ("0", "0", 0.0, 0.0),
+    ] {
+        let moved = write(&["--latitude", lat, "--longitude", lon]);
+        assert_eq!(
+            moved["location"],
+            serde_json::json!({
+                "latitude": expected_lat, "longitude": expected_lon
+            })
+        );
+        assert_eq!(moved["starred"], false);
+        assert_eq!(moved["timeZone"], "Asia/Kathmandu");
+    }
+
+    let all_day = write(&["--date", "2026-03-30"]);
+    assert_eq!(all_day["isAllDay"], true);
+    assert_eq!(all_day["timeZone"], "");
+    let timed = write(&["--date", "2026-03-30T16:45:00Z"]);
+    assert!(timed.get("isAllDay").is_none());
+    assert!(timed["timeZone"].is_null());
+    write(&["--date", "2026-03-30"]);
+    let timed_with_zone = write(&["--date", "2026-03-30T16:45:00Z", "--time-zone", "UTC"]);
+    assert_eq!(timed_with_zone["timeZone"], "UTC");
+    assert_eq!(timed_with_zone["date"], 1774889100000_f64);
+}
+
+#[test]
+fn entry_write_metadata_rejects_invalid_input_without_changing_saved_work() {
+    let config = tempfile::tempdir().unwrap();
+    seed_local_auth_and_journal(config.path(), "j-metadata");
+    let conn = Connection::open(staging_db_path(config.path())).unwrap();
+    let photo = config.path().join("photo.png");
+    write_temp_attachment(&photo, tiny_png_bytes());
+    let run = |options: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_dayone"))
+            .env("DAYONE_CONFIG_DIR", config.path())
+            .env("DAYONE_TELEMETRY", "0")
+            .env("DO_NOT_TRACK", "1")
+            .args([
+                "--profile",
+                "staging",
+                "entry",
+                "write",
+                "--journal-id",
+                "j-metadata",
+                "--entry-id",
+                "A65AFA22B98A0DEC62EAAD3CD1CCF45D",
+                "--body",
+                "Keep this entry",
+                "--attach",
+                photo.to_str().unwrap(),
+            ])
+            .args(options)
+            .output()
+            .unwrap()
+    };
+    let initial = run(&[]);
+    assert!(
+        initial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initial.stderr)
+    );
+    let snapshot = || -> (String, i64, Vec<String>) {
+        let entry = conn.query_row(
+            "SELECT json_array(data_json, user_edit_date, updated_at, time_zone, extra_fields_json) FROM entries",
+            [], |row| row.get(0),
+        ).unwrap();
+        let attachments = conn
+            .query_row("SELECT COUNT(*) FROM entry_attachments", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let queued = conn
+            .prepare("SELECT payload_json FROM sync_outbox ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<String>, _>>()
+            .unwrap();
+        (entry, attachments, queued)
+    };
+    let before = snapshot();
+    assert!(before.0.contains("Keep this entry"));
+    assert_eq!(before.1, 1);
+    assert_eq!(before.2.len(), 2);
+    let cases: &[(&[&str], &str)] = &[
+        (&["--time-zone", "Not/A_Zone"], "--time-zone"),
+        (&["--time-zone", "+02:00"], "--time-zone"),
+        (&["--time-zone", ""], "--time-zone"),
+        (&["--starred", "maybe"], "--starred"),
+        (&["--latitude", "12"], "--longitude"),
+        (&["--longitude", "34"], "--latitude"),
+        (&["--place-name", "Cafe"], "--latitude"),
+        (
+            &["--latitude", "90.001", "--longitude", "0"],
+            "--latitude must be",
+        ),
+        (
+            &["--latitude", "-90.001", "--longitude", "0"],
+            "--latitude must be",
+        ),
+        (
+            &["--latitude", "0", "--longitude", "180.001"],
+            "--longitude must be",
+        ),
+        (
+            &["--latitude", "0", "--longitude", "-180.001"],
+            "--longitude must be",
+        ),
+        (
+            &["--latitude", "NaN", "--longitude", "0"],
+            "--latitude must be",
+        ),
+        (
+            &["--latitude", "0", "--longitude", "inf"],
+            "--longitude must be",
+        ),
+        (
+            &["--latitude", "0", "--longitude", "0", "--place-name", "  "],
+            "--place-name cannot be empty",
+        ),
+        (&["--all-day", "--time-zone", "UTC"], "--all-day"),
+        (
+            &["--date", "2026-03-30", "--time-zone", "UTC"],
+            "all-day entry",
+        ),
+    ];
+    for (options, message) in cases {
+        let output = run(options);
+        assert!(!output.status.success(), "accepted {options:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(message),
+            "{options:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            snapshot(),
+            before,
+            "rejected {options:?} must not change saved work"
+        );
+    }
+
+    // The existing entry's all-day state matters even when --date is omitted.
+    assert!(run(&["--date", "2026-03-30"]).status.success());
+    let before = snapshot();
+    let output = run(&["--time-zone", "Europe/Athens"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("all-day entry"));
+    assert_eq!(snapshot(), before);
+}
+
+#[test]
 fn entry_tag_rejects_unsafe_edits_and_rolls_back_if_queue_write_fails() {
     let config = tempfile::tempdir().unwrap();
     seed_local_auth_and_journal(config.path(), "j-tags");

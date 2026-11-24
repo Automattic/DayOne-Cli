@@ -218,6 +218,7 @@ pub(crate) async fn run_pull_phase<C: DayOneApiClient>(
     feature_flags: &FeatureFlags,
     profile_id: i64,
     user_id: Option<&str>,
+    embeddings: &mut EmbeddingSyncOutput,
 ) -> Result<()> {
     run_singleton_resource(
         store,
@@ -389,7 +390,7 @@ pub(crate) async fn run_pull_phase<C: DayOneApiClient>(
     };
 
     let journal_ids = store.get_sync_enabled_journal_ids()?;
-    let mut embeddings_enabled = crate::entry_embeddings::embeddings_enabled();
+    *embeddings = EmbeddingSyncOutput::new(crate::entry_embeddings::embeddings_enabled());
     for journal_id in journal_ids {
         let resource_key = format!("entries:{journal_id}");
         let entry_path = format!("/v2/sync/entries/{journal_id}/feed");
@@ -413,7 +414,7 @@ pub(crate) async fn run_pull_phase<C: DayOneApiClient>(
                 api_path: &entry_path,
                 static_params: &params,
                 entries_decryptor: entries_decryptor.as_ref(),
-                embeddings_enabled: &mut embeddings_enabled,
+                embeddings,
             },
         )
         .await;
@@ -729,7 +730,8 @@ pub(crate) async fn run_pull_phase<C: DayOneApiClient>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsa::rand_core::OsRng;
+    use getrandom::SysRng;
+    use rsa::rand_core::UnwrapErr;
     use rusqlite::OptionalExtension;
     use serde_json::json;
     use tempfile::Builder;
@@ -888,13 +890,13 @@ mod tests {
     fn journal_pull_replaces_and_clears_privacy_safe_metadata_diagnostics() {
         let path = test_store_path("metadata-diagnostics");
         let store = Store::open_at(&*path).expect("store should open");
-        let mut rng = OsRng;
+        let mut rng = UnwrapErr(SysRng);
         let user_private =
-            RsaPrivateKey::new(&mut rng, 2048).expect("user private key should generate");
+            PrivateKey::new(&mut rng, 2048).expect("user private key should generate");
         let vault_key = [7_u8; 32];
         let encrypted_vault_key = user_private
             .to_public_key()
-            .encrypt(&mut rng, Oaep::new::<Sha1>(), &vault_key)
+            .encrypt(&mut rng, Oaep::<Sha1>::new(), &vault_key)
             .expect("vault key should wrap");
         let decryptor = JournalDecryptor {
             user_id: Some("user-1".to_owned()),

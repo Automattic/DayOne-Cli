@@ -1,3 +1,4 @@
+use crate::util::bytes_to_hex_lower;
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 
@@ -9,7 +10,7 @@ pub(crate) fn short_hash(value: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(value.as_bytes());
     let digest = hasher.finalize();
-    format!("{:x}", digest)[0..12].to_owned()
+    bytes_to_hex_lower(&digest)[0..12].to_owned()
 }
 
 pub(crate) fn user_id_from_session_json(user_json: &str) -> StoreResult<Option<String>> {

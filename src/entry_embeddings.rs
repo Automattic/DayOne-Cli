@@ -1,3 +1,4 @@
+use crate::util::bytes_to_hex_lower;
 #[cfg(test)]
 use std::cell::RefCell;
 #[cfg(all(not(test), feature = "embeddings"))]
@@ -68,7 +69,7 @@ fn sha256_hex(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
     let digest = hasher.finalize();
-    format!("{:x}", digest)
+    bytes_to_hex_lower(&digest)
 }
 
 #[cfg(all(not(test), feature = "embeddings"))]
@@ -159,6 +160,7 @@ fn embedding_model() -> Result<&'static Mutex<TextEmbedding>> {
             .with_show_download_progress(false);
         TextEmbedding::try_new(options)
             .map(Mutex::new)
+            .map_err(anyhow::Error::new)
             .with_context(|| {
                 format!(
                     "model cache directory '{}' (HF_HOME takes precedence over FASTEMBED_CACHE_DIR)",

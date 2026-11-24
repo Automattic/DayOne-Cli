@@ -1,4 +1,5 @@
 use super::*;
+use crate::util::bytes_to_hex_lower;
 use md5::{Digest, Md5};
 
 pub(crate) fn build_outbox_crypto_context(store: &Store, profile_id: i64) -> Result<CryptoContext> {
@@ -78,7 +79,7 @@ pub(crate) async fn push_original_media_outbox<C: DayOneApiClient>(
     // ciphertext for E2E journals (the original-bytes md5 still lives inside the
     // encrypted entry content). Plaintext journals keep the original md5.
     let object_md5 = match encrypted_media.as_ref() {
-        Some(ciphertext) => format!("{:x}", Md5::digest(ciphertext)),
+        Some(ciphertext) => bytes_to_hex_lower(&Md5::digest(ciphertext)),
         None => attachment.md5_body.clone(),
     };
     let headers = vec![
@@ -650,7 +651,7 @@ mod media_upload_tests {
                 moment_type: "image".to_owned(),
                 content_type: "image/jpeg".to_owned(),
                 file_size_bytes: MEDIA_BYTES.len() as i64,
-                md5_body: format!("{:x}", Md5::digest(MEDIA_BYTES)),
+                md5_body: bytes_to_hex_lower(&Md5::digest(MEDIA_BYTES)),
                 width: None,
                 height: None,
                 duration_seconds: None,
@@ -743,7 +744,7 @@ mod media_upload_tests {
         // S3 object md5 metadata describes the uploaded ciphertext.
         assert_eq!(
             header_value(&upload.headers, "x-amz-meta-md5"),
-            Some(format!("{:x}", Md5::digest(&upload.body)).as_str())
+            Some(bytes_to_hex_lower(&Md5::digest(&upload.body)).as_str())
         );
         // Server-side encryption stays on as defense-in-depth.
         assert_eq!(
@@ -806,7 +807,7 @@ mod media_upload_tests {
         assert_eq!(upload.body, MEDIA_BYTES);
         assert_eq!(
             header_value(&upload.headers, "x-amz-meta-md5"),
-            Some(format!("{:x}", Md5::digest(MEDIA_BYTES)).as_str())
+            Some(bytes_to_hex_lower(&Md5::digest(MEDIA_BYTES)).as_str())
         );
     }
 }

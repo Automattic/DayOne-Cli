@@ -1,8 +1,10 @@
+use crate::util::bytes_to_hex_lower;
 use std::fs;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
-use rsa::rand_core::{OsRng, RngCore};
+use getrandom::SysRng;
+use rsa::rand_core::{Rng, UnwrapErr};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -698,11 +700,11 @@ fn generate_id(prefix: &str) -> String {
     hasher.update(now_epoch_ms().to_le_bytes());
     hasher.update(std::process::id().to_le_bytes());
     let mut nonce = [0_u8; 16];
-    let mut rng = OsRng;
+    let mut rng = UnwrapErr(SysRng);
     rng.fill_bytes(&mut nonce);
     hasher.update(nonce);
     let digest = hasher.finalize();
-    let hex = format!("{:x}", digest);
+    let hex = bytes_to_hex_lower(&digest);
     format!("{prefix}-{}", &hex[0..16])
 }
 

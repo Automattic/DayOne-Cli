@@ -15,4 +15,14 @@ mod outbox;
 mod profile;
 #[cfg(all(feature = "embeddings", unix))]
 mod search;
+mod sync;
 mod telemetry_consent;
+
+fn sha256_hex(input: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    Sha256::digest(input)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}

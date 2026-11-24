@@ -13,14 +13,11 @@ use md5::Md5;
 use rsa::pkcs1::{DecodeRsaPrivateKey, DecodeRsaPublicKey, EncodeRsaPrivateKey};
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
 use rsa::traits::PublicKeyParts;
-use rsa::{Oaep, RsaPrivateKey, RsaPublicKey};
+use rsa::{Oaep, PrivateKey, PublicKey};
 use serde_json::Value;
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
-use crate::entry_embeddings::{
-    compute_embedding_for_searchable_text, entry_searchable_text, source_hash_for_searchable_text,
-};
 use crate::http::DayOneApiClient;
 use crate::models::{Entry, EntryId, Journal, JournalId, Moment};
 use crate::store::sqlite::{JournalSyncStatus, Store};
@@ -30,17 +27,18 @@ use crate::sync::crypto::{
     UserKeysPayload, build_crypto_context_from_sources, decrypt_payload,
     derive_d1_symmetric_key_from_master_key,
 };
+use crate::sync::embeddings::EmbeddingSyncOutput;
 use crate::sync::engine::{MAX_PAGE_LOOPS, ResourceSyncOutput, log_sync, now_epoch_ms};
 #[derive(Debug, Clone)]
 pub(crate) struct JournalDecryptor {
     user_id: Option<String>,
-    user_private_key: RsaPrivateKey,
-    user_verify_keys: HashMap<String, RsaPublicKey>,
+    user_private_key: PrivateKey,
+    user_verify_keys: HashMap<String, PublicKey>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct EntriesDecryptor {
-    journal_keys_by_fingerprint: HashMap<String, RsaPrivateKey>,
+    journal_keys_by_fingerprint: HashMap<String, PrivateKey>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -55,7 +53,7 @@ struct EntriesFeedResourceParams<'a> {
     api_path: &'a str,
     static_params: &'a [(String, String)],
     entries_decryptor: Option<&'a EntriesDecryptor>,
-    embeddings_enabled: &'a mut bool,
+    embeddings: &'a mut EmbeddingSyncOutput,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
