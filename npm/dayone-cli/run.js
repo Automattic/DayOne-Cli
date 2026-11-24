@@ -3,31 +3,8 @@
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { readFileSync } from "node:fs";
-import updateNotifier from "update-notifier";
-import semverGt from "semver/functions/gt.js";
 
 const require = createRequire(import.meta.url);
-const notifierPkg = JSON.parse(
-  readFileSync(new URL("./package.json", import.meta.url), "utf8")
-);
-
-// Update notifier — always check, write to stderr to preserve JSON stdout.
-// update-notifier's own notify() guards on stdout.isTTY, so we check manually
-// to also prompt updates when invoked by AI agents (non-TTY).
-//
-// Workaround: update-notifier deletes the cached update after reading it
-// (one-shot). We write it back so the notice shows on every run until the
-// user actually updates. We compare against the installed version, not the
-// cached current, to prevent stale/downgrade notices.
-const notifier = updateNotifier({ pkg: notifierPkg });
-const u = notifier.update;
-if (u && semverGt(u.latest, notifierPkg.version)) {
-  notifier.config.set("update", u);
-  const msg = `Update available: ${notifierPkg.version} → ${u.latest}\n` +
-    `Run "npm i -g ${notifierPkg.name}" to update`;
-  process.stderr.write(`\n${msg}\n\n`);
-}
 
 const PLATFORM_PACKAGES = {
   "darwin-arm64": "@dayone/cli-darwin-arm64",
@@ -92,7 +69,11 @@ if (!binaryPath || !resolvedPkg) {
 const args = process.argv.slice(2);
 
 try {
-  execFileSync(binaryPath, args, { stdio: "inherit" });
+  // The binary owns update discovery for both npm and direct installations.
+  execFileSync(binaryPath, args, {
+    stdio: "inherit",
+    env: { ...process.env, DAYONE_INSTALL_METHOD: "npm" },
+  });
 } catch (e) {
   if (e.signal) {
     process.kill(process.pid, e.signal);

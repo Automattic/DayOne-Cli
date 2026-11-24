@@ -17,6 +17,7 @@ mod profile;
 mod search;
 mod sync;
 mod telemetry_consent;
+mod updates;
 
 fn sha256_hex(input: &[u8]) -> String {
     use sha2::{Digest, Sha256};

@@ -16,6 +16,7 @@ fn unique_tmp_dir(label: &str) -> PathBuf {
 fn run_dayone(config_dir: &Path, args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_dayone"))
         .env("DAYONE_CONFIG_DIR", config_dir)
+        .env("NO_UPDATE_NOTIFIER", "1")
         .args(args)
         .output()
         .expect("dayone command should execute")
