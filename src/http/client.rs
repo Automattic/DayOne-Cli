@@ -1,10 +1,129 @@
-use anyhow::{Context, Result, anyhow};
-use reqwest::header::CONTENT_TYPE;
+use anyhow::{Context, Result, anyhow, ensure};
+use reqwest::StatusCode;
+use reqwest::header::{CONTENT_TYPE, HeaderMap, LOCATION};
 use serde_json::Value;
 
 use crate::auth::types::{LoginV3RequestBody, LoginV3Response};
 use crate::diagnostics::{HttpTrace, byte_len, json_len};
 use crate::http::{DayOneApiClient, bearer_headers, ensure_success, normalize_base_url};
+use crate::util::encode_path_segment;
+
+pub(crate) struct AttachmentDownloader {
+    base_url: String,
+    client: reqwest::Client,
+    headers: HeaderMap,
+}
+
+impl AttachmentDownloader {
+    pub(crate) fn new(base_url: &str, token: &str) -> Result<Self> {
+        Ok(Self {
+            base_url: normalize_base_url(base_url)?,
+            client: reqwest::Client::builder()
+                .user_agent(format!("dayone-cli/{}", env!("CARGO_PKG_VERSION")))
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .read_timeout(std::time::Duration::from_secs(30))
+                .build()
+                .context("failed to initialize attachment HTTP client")?,
+            headers: bearer_headers(token)?,
+        })
+    }
+
+    pub(crate) async fn download(
+        &self,
+        journal_id: &str,
+        attachment_id: &str,
+        md5: Option<&str>,
+    ) -> Result<Vec<u8>> {
+        ensure!(
+            !matches!(journal_id, "" | "." | "..") && !matches!(attachment_id, "" | "." | ".."),
+            "invalid journal or attachment ID"
+        );
+        let limit = crate::entry::attachments::MAX_ATTACHMENT_FILE_SIZE_BYTES + 64 * 1024;
+        let mut response = self
+            .request_original(journal_id, attachment_id, md5)
+            .await?;
+        ensure!(
+            response.content_length().is_none_or(|len| len <= limit),
+            "original attachment exceeds the size limit"
+        );
+        let mut data = Vec::new();
+        while let Some(bytes) = response
+            .chunk()
+            .await
+            .map_err(reqwest::Error::without_url)
+            .context("failed to read original attachment bytes")?
+        {
+            ensure!(
+                (data.len() + bytes.len()) as u64 <= limit,
+                "original attachment exceeds the size limit"
+            );
+            data.extend_from_slice(&bytes);
+        }
+        ensure!(!data.is_empty(), "original attachment is empty");
+        Ok(data)
+    }
+
+    async fn request_original(
+        &self,
+        journal_id: &str,
+        attachment_id: &str,
+        md5: Option<&str>,
+    ) -> Result<reqwest::Response> {
+        let mut request = self
+            .client
+            .get(format!(
+                "{}/api/journals/{}/attachments/{}/download",
+                self.base_url,
+                encode_path_segment(journal_id),
+                encode_path_segment(attachment_id),
+            ))
+            .query(&[("thumbnail", false)])
+            .headers(self.headers.clone());
+        if let Some(md5) =
+            md5.filter(|hash| hash.len() == 32 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            request = request.query(&[("md5", md5)]);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(reqwest::Error::without_url)
+            .context("failed to request attachment download URL")?;
+        ensure!(
+            response.status() == StatusCode::TEMPORARY_REDIRECT,
+            "Day One could not provide an attachment download URL (HTTP {})",
+            response.status().as_u16()
+        );
+        let location = response
+            .headers()
+            .get(LOCATION)
+            .and_then(|header| header.to_str().ok())
+            .and_then(|location| reqwest::Url::parse(location).ok())
+            .context("Day One returned an invalid attachment download URL")?;
+        ensure!(
+            (location.scheme() == "https"
+                || (location.scheme() == "http" && self.base_url.starts_with("http://")))
+                && location.username().is_empty()
+                && location.password().is_none(),
+            "Day One returned an unsafe attachment download URL"
+        );
+
+        let response = self
+            .client
+            .get(location)
+            .send()
+            .await
+            .map_err(reqwest::Error::without_url)
+            .context("failed to request original attachment bytes")?;
+        ensure!(
+            response.status() == StatusCode::OK,
+            "could not download original attachment bytes (HTTP {})",
+            response.status().as_u16()
+        );
+        Ok(response)
+    }
+}
 
 #[derive(Clone)]
 pub struct DayOneClient {

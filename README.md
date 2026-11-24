@@ -154,6 +154,19 @@ dayone list entries --journal-id <journal-id> --sort-method editDate
 
 ## Common Commands
 
+### Sync results and search embeddings
+
+`dayone sync` reports data resources and search embeddings separately. The JSON `embeddings` object contains `status`, `generated`, `unchanged`, `failed`, `skipped`, and `error`.
+
+- `status` is `success`, `failed`, `disabled` (a build without embeddings), or `not_run` (the run did not reach the entry phase).
+- The counts cover eligible entries processed in this run, not the whole local index. Deleted entries and entries without searchable text do not need embeddings.
+- `unchanged` counts entries with a current source hash. `skipped` counts entries that need an embedding after an earlier embedding failure.
+- `error` is `generation_failed`, `storage_failed`, or `null`. It reports the first embedding failure without entry content or identifiers.
+
+An embedding failure does not stop the data pull or outbox phase. Successful data resources retain their `success` status and cursors. The overall result has `ok: false`, and the command exits with code 1. `fatal_error` remains `null` unless another error aborts the run. Builds without embeddings do not fail because of this intentional omission.
+
+After you correct the model or storage error, run `dayone embeddings recalculate-entries` to repair the local search index. A later sync does not automatically repair embeddings for unchanged entries. Use `dayone doctor` to inspect index coverage.
+
 ### Sync scheduling
 
 Journal and entry workflows are local-first. Listing, searching, and reading entries use the local SQLite store; journal, entry, comment-body, Daily Chat, and context-item changes queue work for `dayone sync`. Authentication, user settings, sync, refreshed comment listings, and comment reactions use the network directly. For normal desktop use, we recommend scheduling automatic sync about every 30 minutes:
@@ -172,7 +185,19 @@ dayone sync-schedule disable
 
 `sync-schedule` uses per-user schedulers: LaunchAgent on macOS, systemd user timers on Linux, and Task Scheduler on Windows. Output is JSON, like other commands.
 
+### Export a journal backup
+
+```bash
+dayone export --output ./dayone-backup.zip
+```
+
+Export runs a normal sync first, which can upload queued changes. It writes one JSON file per journal and includes the original attachments for live entries. If a journal or entry sync fails, or if an attachment cannot be fetched or decrypted, the CLI does not save a ZIP at the requested path. It does not replace an existing file.
+
+The ZIP is unencrypted. Choose a location where you can protect it. The CLI does not keep a separate copy of the downloaded media. If the process stops abruptly, it can leave a partial `.dayone-export-*` file in the destination directory.
+
 ### Entries
+
+This section describes the current source. npm version `0.22.1` does not include `entry tag`, `--tag`, or the time-zone, star, and location options below. Check `dayone entry write --help` for the options in your installed binary.
 
 Write an entry:
 
@@ -209,11 +234,30 @@ dayone entry write --journal-id <journal-id> --body "Trip notes" --tag travel --
 
 Each `--tag` adds a tag without replacement of current tags. To remove tags, use `entry tag --remove`.
 
+Set the entry's time zone, star, and location:
+
+```bash
+dayone entry write --journal-id <journal-id> --body "Trip notes" \
+	--date 2026-03-31T09:30:00+03:00 --time-zone Europe/Athens \
+	--starred true --tag travel \
+	--latitude 37.9715 --longitude 23.7257 \
+	--place-name "Acropolis" --locality-name Athens --country Greece
+```
+
+- `--time-zone` accepts an IANA name, such as `Europe/Athens` or `UTC`. It sets the display zone without changing the instant specified by an RFC3339 `--date`. When omitted, timed entry updates preserve the existing zone, even with a new `--date`. New timed entries without this option retain `timeZone: null`.
+- `--starred true` sets the star; `--starred false` clears it. Omit the option to preserve the existing value.
+- `--latitude` and `--longitude` must be supplied together. Both must be finite numbers, with latitude from -90 to 90 and longitude from -180 to 180, inclusive. Negative values work with either `--longitude -74.0060` or `--longitude=-74.0060`.
+- Optional location details are `--place-name`, `--locality-name`, `--administrative-area`, `--country`, and `--street-address`. They require coordinates and cannot be blank. Coordinates replace the entire location, including old details not supplied in the command. Omit coordinates to preserve the existing location. The CLI does not geocode addresses or infer a time zone from coordinates.
+
+These options work with tags and attachments. `entry write` still requires `--body` or `--body-stdin`, including when updating metadata on an existing entry.
+
 Write an all-day entry (time ignored on display):
 
 ```bash
 dayone entry write --journal-id <journal-id> --date 2026-03-31T09:30:00Z --all-day --body "Daily summary"
 ```
+
+A date-only `--date YYYY-MM-DD` also creates an all-day entry. All-day entries use an empty time zone and reject `--time-zone`. To give an existing all-day entry a time and zone, supply an RFC3339 `--date` and `--time-zone` without `--all-day`.
 
 Write an entry with attachments (repeat `--attach`):
 
@@ -468,6 +512,8 @@ dayone doctor > dayone-doctor.json
 
 The top-level `status` and `check_counts` support quick triage. Checks report `pass`, `finding`, `fail`, or `not_run`: findings need user context, while failures identify concrete breakage. Individual findings use stable codes plus impact and suggested action; configuration details distinguish an actual config file from built-in fallback defaults.
 
+The `embedding_index` check counts missing, stale, and current source hashes for live entries with searchable text. It suggests `dayone embeddings recalculate-entries` when the index is incomplete. It does not download or initialize a model, validate vector contents, or verify model runtime health. Its results contain aggregate counts only. Doctor retains its report-only exit behavior: inspect the JSON status and findings, not the exit code, for local problems.
+
 Raw journal and entry IDs are excluded by default. For deliberate local investigation, `dayone doctor --include-private-identifiers` includes them and marks the report private; journal names and entry content remain excluded.
 
 To reproduce a command failure with structured timing and subsystem checkpoints, write a local JSONL trace:
@@ -490,7 +536,7 @@ Important limits:
 - Some sync failures require manual outbox inspection; not every conflict is automatically resolved.
 - macOS Intel, Windows x64, and Linux `-no-embeddings` builds do not provide semantic embedding search. Keyword search remains available.
 - Windows x64 is supported, but Windows code signing is not part of the first release; SmartScreen may warn on a downloaded binary.
-- Homebrew, Cargo publishing, package marketplaces, MCP, location editing, and full native-app feature parity are not launch features.
+- Homebrew, Cargo publishing, package marketplaces, MCP, automatic location detection, geocoding, and full native-app feature parity are not launch features.
 
 ## Output and notes
 

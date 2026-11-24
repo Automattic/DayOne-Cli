@@ -110,7 +110,12 @@ pub fn build_entry_content(
                 obj.insert("timeZone".to_owned(), Value::String(String::new()));
             } else {
                 obj.remove("isAllDay");
-                obj.insert("timeZone".to_owned(), Value::Null);
+                // Preserve a timed entry's zone; the all-day empty-zone sentinel
+                // does not apply when converting back to a timed entry.
+                if obj.get("timeZone").and_then(Value::as_str) == Some("") {
+                    obj.insert("timeZone".to_owned(), Value::Null);
+                }
+                obj.entry("timeZone".to_owned()).or_insert(Value::Null);
             }
         } else {
             obj.entry("date".to_owned())

@@ -1,12 +1,14 @@
+use crate::util::bytes_to_hex_lower;
 use std::fs;
 
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use getrandom::SysRng;
 use rsa::pkcs1::DecodeRsaPublicKey;
 use rsa::pkcs8::{DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding};
-use rsa::rand_core::{OsRng, RngCore};
-use rsa::{Oaep, RsaPrivateKey, RsaPublicKey};
+use rsa::rand_core::{Rng, UnwrapErr};
+use rsa::{Oaep, PrivateKey, PublicKey};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sha1::Sha1;
@@ -14,8 +16,8 @@ use sha2::{Digest, Sha256};
 
 use crate::store::sqlite::Store;
 use crate::sync::crypto::{
-    bytes_to_hex_lower, decrypt_d1_mode0_with_key, derive_d1_symmetric_key_from_master_key,
-    encrypt_d1_mode0_with_key, parse_private_key_bytes,
+    decrypt_d1_mode0_with_key, derive_d1_symmetric_key_from_master_key, encrypt_d1_mode0_with_key,
+    parse_private_key_bytes,
 };
 use crate::util::now_rfc3339_utc;
 
@@ -58,7 +60,7 @@ struct UserKeyMaterial {
     user_id: String,
     user_fingerprint: String,
     user_public_key_pem: String,
-    user_private_key: RsaPrivateKey,
+    user_private_key: PrivateKey,
     owner_public_key_signature: Option<String>,
 }
 
@@ -458,18 +460,18 @@ fn parse_user_key_material(master_key: &str, user_key_json: &str) -> Result<User
     })
 }
 
-fn parse_public_key_pem(pem: &str) -> Result<RsaPublicKey> {
-    if let Ok(pk) = RsaPublicKey::from_public_key_pem(pem) {
+fn parse_public_key_pem(pem: &str) -> Result<PublicKey> {
+    if let Ok(pk) = PublicKey::from_public_key_pem(pem) {
         return Ok(pk);
     }
-    Ok(RsaPublicKey::from_pkcs1_pem(pem)?)
+    Ok(PublicKey::from_pkcs1_pem(pem)?)
 }
 
 fn build_e2e_encryption_payload(keys: &UserKeyMaterial) -> Result<Value> {
     let user_public_key = parse_public_key_pem(&keys.user_public_key_pem)?;
 
-    let mut rng = OsRng;
-    let journal_private = RsaPrivateKey::new(&mut rng, 2048)?;
+    let mut rng = UnwrapErr(SysRng);
+    let journal_private = PrivateKey::new(&mut rng, 2048)?;
     let journal_public = journal_private.to_public_key();
 
     let mut vault_key = [0_u8; 32];
@@ -477,7 +479,7 @@ fn build_e2e_encryption_payload(keys: &UserKeyMaterial) -> Result<Value> {
     let vault_key_fingerprint = bytes_to_hex_lower(&Sha256::digest(vault_key));
 
     let user_encrypted_vault_key =
-        user_public_key.encrypt(&mut rng, Oaep::new::<Sha1>(), &vault_key)?;
+        user_public_key.encrypt(&mut rng, Oaep::<Sha1>::new(), &vault_key)?;
     let user_encrypted_vault_key_b64 = BASE64_STANDARD.encode(user_encrypted_vault_key);
 
     // Day One web (WebCrypto) and Apple clients require the journal keypair in
@@ -562,7 +564,7 @@ fn build_e2e_encryption_payload(keys: &UserKeyMaterial) -> Result<Value> {
 /// "RSASSA-PKCS1-v1_5" }, key, data)`, which hashes the message internally. The
 /// `rsa` crate's `Pkcs1v15Sign::new::<Sha256>()` expects the already-computed
 /// digest, so we hash first and sign the digest.
-fn rsa_pkcs1v15_sha256_sign(key: &RsaPrivateKey, data: &[u8]) -> Result<String> {
+fn rsa_pkcs1v15_sha256_sign(key: &PrivateKey, data: &[u8]) -> Result<String> {
     let digest = Sha256::digest(data);
     let signature = key.sign(
         rsa::pkcs1v15::Pkcs1v15Sign::new::<Sha256>(),
@@ -591,7 +593,7 @@ fn short_hash(value: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(value.as_bytes());
     let digest = hasher.finalize();
-    format!("{:x}", digest)[0..12].to_owned()
+    bytes_to_hex_lower(&digest)[0..12].to_owned()
 }
 
 #[cfg(test)]
@@ -737,8 +739,8 @@ mod tests {
     async fn e2e_create_uses_direct_user_key_and_accepts_legacy_shapes() {
         let derived = derive_d1_symmetric_key_from_master_key(TEST_MASTER_KEY)
             .expect("master key should derive");
-        let mut rng = OsRng;
-        let private = RsaPrivateKey::new(&mut rng, 2048).expect("rsa key should generate");
+        let mut rng = UnwrapErr(SysRng);
+        let private = PrivateKey::new(&mut rng, 2048).expect("rsa key should generate");
         let public_pem = private
             .to_public_key()
             .to_public_key_pem(LineEnding::LF)
@@ -801,8 +803,8 @@ mod tests {
 
     #[test]
     fn build_e2e_payload_has_required_fields_and_decryptable_private_key() {
-        let mut rng = OsRng;
-        let user_private = RsaPrivateKey::new(&mut rng, 2048).expect("rsa key should generate");
+        let mut rng = UnwrapErr(SysRng);
+        let user_private = PrivateKey::new(&mut rng, 2048).expect("rsa key should generate");
         let user_public = user_private.to_public_key();
         let keys = UserKeyMaterial {
             user_id: TEST_USER_ID.to_owned(),
@@ -839,7 +841,7 @@ mod tests {
             .decode(encrypted_vault_key)
             .expect("vault key should decode");
         let vault_key = user_private
-            .decrypt(Oaep::new::<Sha1>(), &encrypted_vault_key)
+            .decrypt(Oaep::<Sha1>::new(), &encrypted_vault_key)
             .expect("vault key should decrypt");
 
         let journal_key = keys_arr[0].as_object().expect("key should be object");
@@ -856,7 +858,7 @@ mod tests {
             decrypted_pem.contains("BEGIN PRIVATE KEY"),
             "journal private key must be PKCS#8, got: {decrypted_pem}"
         );
-        assert!(RsaPrivateKey::from_pkcs8_pem(decrypted_pem).is_ok());
+        assert!(PrivateKey::from_pkcs8_pem(decrypted_pem).is_ok());
 
         // The journal public key must be SPKI (`BEGIN PUBLIC KEY`), not PKCS#1.
         let journal_public_pem = journal_key
@@ -872,7 +874,7 @@ mod tests {
         // The fingerprint must be the SHA-256 of the SPKI DER, matching the
         // web/Apple convention so freshly created journals are self-consistent.
         let public_key =
-            RsaPublicKey::from_public_key_pem(journal_public_pem).expect("public key parses");
+            PublicKey::from_public_key_pem(journal_public_pem).expect("public key parses");
         let expected_fingerprint = bytes_to_hex_lower(&Sha256::digest(
             public_key.to_public_key_der().unwrap().as_bytes(),
         ));
