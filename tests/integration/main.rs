@@ -13,6 +13,8 @@ mod entry_read;
 mod memory_process;
 mod outbox;
 mod profile;
+#[cfg(all(feature = "embeddings", unix))]
+mod search;
 mod sync;
 mod telemetry_consent;
 mod updates;
