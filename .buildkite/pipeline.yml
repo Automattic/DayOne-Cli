@@ -11,10 +11,15 @@ steps:
   # This condition runs before the child-step credentials plugin loads.
   - group: ":apple: macOS"
     key: macos
-    if: |
-      build.source_event == "push" &&
-      build.tag =~ /^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$$/
     steps:
+      - label: "[DO NOT MERGE] Assert the VM is xcode-27.2-v4"
+        command: .buildkite/commands/assert-image.sh v4
+
+      - label: "[DO NOT MERGE] Control: assert the check rejects xcode-27.2-v3"
+        command: .buildkite/commands/assert-image.sh v3
+        env:
+          IMAGE_ID: xcode-27.2-v3
+
       - label: "Build, sign, notarize (arm64)"
         key: macos-arm64
         command: .buildkite/commands/build-sign-notarize.sh aarch64-apple-darwin dayone-darwin-arm64
